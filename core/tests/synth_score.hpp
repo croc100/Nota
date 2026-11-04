@@ -34,7 +34,12 @@ struct SynthScore {
   nota::GrayImage image;
   // 모든 오선의 정답 중심 y. 위에서 아래 순서.
   std::vector<double> line_centers;
-  int staff_count = 0;  // 5선 묶음 개수 (= systems * 2)
+  // 모든 마디선의 정답 중심 x. 시스템 순서대로.
+  std::vector<double> barline_x;
+  int staff_count = 0;   // 5선 묶음 개수 (= systems * 2)
+  int system_count = 0;  // 대보표 개수
+  double x_start = 0.0;  // 오선의 좌측 끝
+  double x_end = 0.0;    // 오선의 우측 끝 (마지막 잉크 픽셀)
 };
 
 namespace detail {
@@ -79,6 +84,9 @@ inline SynthScore GenerateScore(const SynthParams& p) {
   SynthScore out;
   out.image = nota::GrayImage(p.width, static_cast<int>(std::ceil(total)), 255);
   out.staff_count = p.systems * 2;
+  out.system_count = p.systems;
+  out.x_start = static_cast<double>(p.margin_x);
+  out.x_end = static_cast<double>(p.width - p.margin_x - 1);
 
   const int x_start = p.margin_x;
   const int x_end = p.width - p.margin_x;
@@ -128,6 +136,7 @@ inline SynthScore GenerateScore(const SynthParams& p) {
                                      t * static_cast<double>(x_end - x_start)) - 2;
         detail::FillRect(out.image, bx, static_cast<int>(system_top), bx + 2,
                          static_cast<int>(system_bottom) + p.line_thickness, 0);
+        out.barline_x.push_back(static_cast<double>(bx) + 0.5);
       }
     }
 

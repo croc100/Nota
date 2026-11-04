@@ -8,6 +8,7 @@ add_library(nota_core
   src/ring_buffer.cpp
   src/binarize.cpp
   src/staff_detect.cpp
+  src/page_analysis.cpp
 )
 
 target_include_directories(nota_core PUBLIC include)

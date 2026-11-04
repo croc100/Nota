@@ -14,6 +14,7 @@
 
 #include "image_io.hpp"
 #include "nota/binarize.hpp"
+#include "nota/page_analysis.hpp"
 #include "nota/staff_detect.hpp"
 
 namespace {
@@ -33,7 +34,8 @@ void PrintUsage() {
 // 검출된 오선을 원본 위에 겹쳐 그린다. 사람이 눈으로 확인하는 것이 V1 검증에서
 // 가장 빠르다. 숫자만 보면 "6개 찾았다"가 맞는지 알 수 없다.
 nota_tools::RgbImage BuildOverlay(const nota::GrayImage& gray,
-                                  const nota::StaffDetectResult& result) {
+                                  const nota::PageAnalysis& page) {
+  const nota::StaffDetectResult& result = page.staves;
   nota_tools::RgbImage out(gray.width, gray.height);
   for (int y = 0; y < gray.height; ++y) {
     for (int x = 0; x < gray.width; ++x) {
@@ -61,6 +63,40 @@ nota_tools::RgbImage BuildOverlay(const nota::GrayImage& gray,
       for (int x = 0; x < 6; ++x) out.set(x, y, 40, 90, 255);
     }
   }
+
+  // 검출된 마디선: 빨간 세로선
+  for (const nota::Barline& bar : page.barlines) {
+    const nota::System& sys = page.systems[static_cast<std::size_t>(bar.system_index)];
+    const int x = static_cast<int>(bar.x);
+    for (int y = static_cast<int>(sys.y_top); y <= static_cast<int>(sys.y_bottom); ++y) {
+      out.set(x, y, 230, 30, 30);
+    }
+  }
+
+  // 시스템 경계: 좌우 끝에 보라색 세로 막대
+  for (const nota::System& sys : page.systems) {
+    for (int y = static_cast<int>(sys.y_top); y <= static_cast<int>(sys.y_bottom); ++y) {
+      for (int d = 0; d < 3; ++d) {
+        out.set(static_cast<int>(sys.x_start) - d, y, 150, 40, 200);
+        out.set(static_cast<int>(sys.x_end) + d, y, 150, 40, 200);
+      }
+    }
+  }
+
+  // 마디 상자: 상단에 번갈아 색이 바뀌는 띠 — 경계가 눈에 바로 들어온다
+  for (const nota::Measure& m : page.measures) {
+    const bool even = (m.index % 2) == 0;
+    const int y = static_cast<int>(m.y_top) - 6;
+    for (int x = static_cast<int>(m.x_start); x <= static_cast<int>(m.x_end); ++x) {
+      for (int d = 0; d < 4; ++d) {
+        if (even) {
+          out.set(x, y - d, 255, 170, 40);
+        } else {
+          out.set(x, y - d, 40, 170, 255);
+        }
+      }
+    }
+  }
   return out;
 }
 
@@ -77,24 +113,39 @@ bool WriteProjectionCsv(const std::string& path,
   return true;
 }
 
-void PrintJson(const nota::GrayImage& gray,
-               const nota::StaffDetectResult& result) {
+void PrintJson(const nota::GrayImage& gray, const nota::PageAnalysis& page) {
+  const nota::StaffDetectResult& result = page.staves;
   std::printf("{\n");
   std::printf("  \"image\": { \"width\": %d, \"height\": %d },\n", gray.width,
               gray.height);
   std::printf("  \"row_threshold\": %d,\n", result.row_threshold);
   std::printf("  \"line_count\": %zu,\n", result.lines.size());
   std::printf("  \"staff_count\": %zu,\n", result.staves.size());
+  std::printf("  \"system_count\": %zu,\n", page.systems.size());
+  std::printf("  \"barline_count\": %zu,\n", page.barlines.size());
+  std::printf("  \"measure_count\": %zu,\n", page.measures.size());
   std::printf("  \"median_staff_space\": %.3f,\n", result.median_staff_space);
-  std::printf("  \"staves\": [\n");
-  for (std::size_t i = 0; i < result.staves.size(); ++i) {
-    const nota::Staff& s = result.staves[i];
+
+  std::printf("  \"systems\": [\n");
+  for (std::size_t i = 0; i < page.systems.size(); ++i) {
+    const nota::System& s = page.systems[i];
     std::printf(
-        "    { \"index\": %zu, \"y_top\": %.2f, \"y_bottom\": %.2f, "
-        "\"staff_space\": %.3f, \"lines\": [%.2f, %.2f, %.2f, %.2f, %.2f] }%s\n",
-        i, s.y_top, s.y_bottom, s.staff_space, s.line_y[0], s.line_y[1],
-        s.line_y[2], s.line_y[3], s.line_y[4],
-        i + 1 < result.staves.size() ? "," : "");
+        "    { \"index\": %zu, \"staves\": %d, \"y_top\": %.2f, "
+        "\"y_bottom\": %.2f, \"x_start\": %.2f, \"x_end\": %.2f, "
+        "\"staff_space\": %.3f }%s\n",
+        i, s.staff_count, s.y_top, s.y_bottom, s.x_start, s.x_end, s.staff_space,
+        i + 1 < page.systems.size() ? "," : "");
+  }
+  std::printf("  ],\n");
+
+  std::printf("  \"measures\": [\n");
+  for (std::size_t i = 0; i < page.measures.size(); ++i) {
+    const nota::Measure& m = page.measures[i];
+    std::printf(
+        "    { \"index\": %d, \"system\": %d, \"x\": [%.2f, %.2f], "
+        "\"y\": [%.2f, %.2f], \"ink\": %d }%s\n",
+        m.index, m.system_index, m.x_start, m.x_end, m.y_top, m.y_bottom,
+        m.ink_density, i + 1 < page.measures.size() ? "," : "");
   }
   std::printf("  ]\n");
   std::printf("}\n");
@@ -151,10 +202,13 @@ int main(int argc, char** argv) {
   }
 
   const nota::BinaryImage bin = nota::BinarizeSauvola(gray.view(), sauvola);
-  const nota::StaffDetectResult result = nota::DetectStaves(bin, detect);
+  nota::PageAnalysisParams analysis_params;
+  analysis_params.staff = detect;
+  const nota::PageAnalysis page = nota::AnalyzePage(bin, analysis_params);
+  const nota::StaffDetectResult& result = page.staves;
 
   if (!overlay_path.empty()) {
-    const nota_tools::RgbImage overlay = BuildOverlay(gray, result);
+    const nota_tools::RgbImage overlay = BuildOverlay(gray, page);
     if (!nota_tools::WritePpm(overlay_path, overlay, &error)) {
       std::fprintf(stderr, "error: %s\n", error.c_str());
       return 1;
@@ -170,6 +224,6 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "projection written: %s\n", projection_path.c_str());
   }
 
-  if (!quiet) PrintJson(gray, result);
+  if (!quiet) PrintJson(gray, page);
   return 0;
 }

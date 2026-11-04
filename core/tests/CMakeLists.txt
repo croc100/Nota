@@ -2,6 +2,7 @@ add_executable(nota_core_tests
   test_framework.cpp
   test_ring_buffer.cpp
   test_staff_detect.cpp
+  test_page_analysis.cpp
 )
 
 target_link_libraries(nota_core_tests PRIVATE nota_core nota_flags)
