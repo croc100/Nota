@@ -1,0 +1,81 @@
+# ---- macOS ----
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# ---- Xcode ----
+build/
+DerivedData/
+*.xcuserstate
+*.xcuserdatad/
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+timeline.xctimeline
+playground.xcworkspace
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# 공유 스킴은 추적한다 (팀 간 빌드 설정 일치)
+!*.xcodeproj/xcshareddata/
+!*.xcworkspace/xcshareddata/
+
+# ---- Swift Package Manager ----
+.build/
+.swiftpm/
+Packages/*/.build/
+Package.resolved.bak
+
+# ---- CocoaPods / Carthage (사용 시) ----
+Pods/
+Carthage/Build/
+
+# ---- Provisioning / 서명 (절대 커밋하지 않는다) ----
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.cer
+*.certSigningRequest
+*.p8
+
+# ---- 환경 / 비밀 ----
+.env
+.env.*
+!.env.example
+secrets.plist
+GoogleService-Info.plist
+
+# ---- Python (prototype/) ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ---- 검증용 대용량 자료 ----
+# 악보 PDF와 연주 녹음은 저작권 문제가 있고 용량이 크므로 커밋하지 않는다.
+# prototype/fixtures/README.md 에 출처와 준비 방법만 기록한다.
+prototype/fixtures/**
+!prototype/fixtures/README.md
+*.wav
+*.aiff
+*.caf
+*.flac
+*.mp3
+*.m4a
+
+# ---- 분석 산출물 ----
+prototype/out/
+*.log
