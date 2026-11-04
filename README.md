@@ -1,33 +1,29 @@
 # Nota
 
-피아노 연주를 듣고 악보를 자동으로 스크롤해주는 악보 앱. iOS와 Android.
+*[한국어 README](README.ko.md)*
 
-## 무엇인가
+A sheet-music app that listens to your piano playing and scrolls the score for you. iOS and Android.
 
-일반적인 악보 앱의 기능(라이브러리, PDF 임포트, 필기 주석, 세트리스트, 메트로놈)을
-모두 갖추고, 여기에 Nota만의 기능을 더한다:
+## What it is
 
-**마이크로 피아노 연주를 실시간으로 들으면서, 연주 속도에 맞춰 악보를 자동으로 스크롤한다.**
+Everything a normal sheet-music app does — library, PDF import, stylus annotation, setlists, metronome — plus the one thing that makes it Nota:
 
-페이지 단위로 넘기는 방식이 아니다. PDF 페이지들을 세로로 이어붙여 하나의 연속된
-악보로 만들고, 연주 진행에 맞춰 부드럽게 아래로 흘려보낸다. 연주자는 손을 떼지 않는다.
+**It listens to the piano through the microphone and scrolls the score at the speed you are actually playing.**
 
-- 피아노 전용 (단일 악기 가정이 음향 분석을 크게 단순화한다)
-- 마이크 오디오는 전부 기기 안에서 처리된다. 서버로 전송하지 않는다.
+Not page flipping. The PDF pages are stitched into a single vertical canvas that flows upward as you play, so your hands never leave the keys.
 
-## 왜 연속 스크롤인가
+- Piano only. Assuming one instrument simplifies the acoustic analysis enormously.
+- Microphone audio is processed entirely on the device. Nothing is sent to a server.
 
-페이지 넘김은 타이밍이 틀리면 치명적이다. 한 박 늦으면 연주자는 이미 없는 마디를
-보고 있다. 연속 스크롤은 조금 어긋나도 악보가 화면에 남아 있으므로 연주를 계속할 수
-있다. 실패 모드가 부드럽다.
+## Why continuous scrolling
 
-또한 어떤 음표가 연주되는지 정확히 알 필요가 없다. "지금 어느 정도 속도로 진행 중인가"
-만 알면 스크롤 속도가 나온다. 이는 OMR(광학 악보 인식)을 필수 요소에서 제외시킨다.
+Page flipping is a discrete event, so a timing error becomes an outright failure: one beat late and the player is looking at a measure that is already gone. Continuous scrolling turns the same error into "the score sits slightly too high or too low" — it is still on screen, and the player recovers. The failure mode is gentle.
 
-## 구조
+It also means we never need to know *which notes* are being played. Knowing roughly how fast the music is moving is enough to set a scroll speed. That takes OMR (optical music recognition) off the critical path.
 
-핵심 알고리즘은 **플랫폼 중립 C++ 코어 하나**에 모아 두고, UI는 각 플랫폼
-네이티브로 작성한다.
+## Architecture
+
+The algorithms live in **one platform-neutral C++ core**; the UI is native on each platform.
 
 ```
 ┌─────────────────┐   ┌─────────────────┐
@@ -36,52 +32,139 @@
 └────────┬────────┘   └────────┬────────┘
          └───────────┬──────────┘
                      ▼
-         ┌───────────────────────┐
-         │  NotaCore  (C++17)    │
-         │  오디오 분석 · 템포 추정 │
-         │  악보 기하 · 위치 추정  │
-         │  스크롤 제어 · PDF 래스터│
-         └───────────────────────┘
+         ┌────────────────────────────┐
+         │  NotaCore  (C++17)         │
+         │  audio analysis · tempo    │
+         │  score geometry · position │
+         │  scroll control · PDF      │
+         └────────────────────────────┘
 ```
 
-코어가 플랫폼 중립이므로 **Xcode나 Android Studio 없이 Linux에서 빌드·테스트**된다.
-가장 위험한 알고리즘을 CI에서 매 커밋 검증할 수 있다.
+Because the core is platform-neutral, it **builds and tests on Linux with no Xcode and no Android Studio**. The riskiest code is verified on every commit, and the rule is enforced by the Linux build passing: no Apple/Android/OS headers in `core/`.
 
-| 레이어 | 공유 | 기술 |
+| Layer | Shared | Technology |
 |---|---|---|
-| 오디오 분석 · 템포 추정 | ✅ | C++17 + SIMD |
-| 악보 기하 분석 (오선·마디선) | ✅ | C++17 |
-| 위치 추정 · 스크롤 제어 | ✅ | C++17 |
-| PDF 래스터화 | ✅ | PDFium (C++) |
-| 앱 UI · 네비게이션 | ❌ | SwiftUI / Jetpack Compose |
-| 오디오 캡처 | ❌ | AVAudioEngine / Oboe |
-| 필기 주석 | ❌ | PencilKit / androidx.ink |
+| Audio analysis · tempo estimation | ✅ | C++17 + SIMD |
+| Score geometry (staves, barlines) | ✅ | C++17 |
+| Position estimation · scroll control | ✅ | C++17 |
+| PDF rasterization | ✅ | PDFium (C++) |
+| App UI · navigation | ❌ | SwiftUI / Jetpack Compose |
+| Audio capture | ❌ | AVAudioEngine / Oboe |
+| Stylus annotation | ❌ | PencilKit / androidx.ink |
 
-UI를 두 번 작성하는 것은 의도된 선택이다. 거대 캔버스의 끊김 없는 스크롤과
-저지연 스타일러스 입력은 크로스 플랫폼 UI 프레임워크가 가장 약한 지점이고,
-플랫폼 기성품(특히 PencilKit)이 압도적으로 낫다.
+Writing the UI twice is deliberate. Jank-free scrolling of a huge canvas and low-latency stylus input are exactly where cross-platform UI frameworks are weakest, and the platform-native components (PencilKit above all) are decisively better.
 
-## 지원 버전
+## Status
 
-| 플랫폼 | 최소 | 우선순위 |
-|---|---|---|
-| iOS / iPadOS | 17.0 | 1차 |
-| Android | API 29 (Android 10) | 2차 |
+**The parts of the core that can be built without audio recordings are done.** There is no app UI yet.
 
-iOS를 먼저 완성한다. 악보 앱의 주 사용 기기가 iPad이고, 하드웨어가 균일해서
-알고리즘 검증 단계의 변수를 줄일 수 있기 때문이다. 다만 코어는 첫 커밋부터
-플랫폼 중립으로 작성하므로 "나중에 이식"이 아니다.
-
-## 상태
-
-설계 단계. 구현 전.
-
-| 문서 | 내용 |
+| Module | What it does |
 |---|---|
-| [docs/DESIGN.md](docs/DESIGN.md) | 아키텍처, 플랫폼 전략, 기술 결정, 리스크, 로드맵 |
-| [docs/ALGORITHM.md](docs/ALGORITHM.md) | 신호 처리 · CV · 제어 알고리즘 상세, 검증 항목 |
-| [docs/decisions/](docs/decisions/) | 주요 기술 결정 기록 (ADR) |
+| `nota::RingBuffer` | Lock-free SPSC queue; split peek/consume for overlapping STFT windows |
+| `nota::BinarizeSauvola` | Adaptive thresholding over an integral image |
+| `nota::EstimateSkewDegrees` / `RotateGray` | Skew estimation and correction |
+| `nota::DetectStaves` | Staff-line detection |
+| `nota::AnalyzePageGray` | Full page pipeline through measure boxes, with self-assessed quality |
+| `nota::ScoreGeometry` | Time ↔ pixel mapping; per-system interpolation, bidirectional |
+| `nota::ScrollController` | Critically damped spring + velocity feedforward + manual override |
+| `nota::PositionEstimator` | Integration + density-matching resync + jump suppression |
+| `nota-analyze` | Page analysis CLI (with detection overlay) |
+| `nota-geometry` | Multi-page → mapping CLI |
+| `nota-simulate` | End-to-end performance simulation CLI |
 
-## 라이선스
+87 unit tests, green under both Release and ASan/UBSan.
 
-미정.
+### Blocked on recordings
+
+Onset detection, tempo estimation and silence detection all need real piano audio. The conditions we need are written up in [prototype/fixtures/README.md](prototype/fixtures/README.md); **pedalled playing is the decisive case**, because that is where onset detection breaks down and where the product's viability is decided. Recording audio and MIDI together from a MIDI keyboard gives onset ground truth for free.
+
+## Measured, not assumed
+
+Thresholds in this repository come from measurement, and the reasoning sits in the comment next to each constant. Ground truth comes from real piano works typeset with Verovio, so there is no hand labelling — the staff and barline elements are read straight out of the SVG.
+
+| What | Result |
+|---|---|
+| Staff / system detection (V1) | 100% on both scores |
+| Measure boundaries (V2) | F = 1.000 (Bach BWV846), 0.923 (Chopin Op.6-2) |
+| Scan degradation | Structure detection 100% across light / medium / heavy presets |
+| Time ↔ pixel mapping | Within ±1 system: **1.000** |
+| Scroll tracking, steady tempo | Median error **0.32 px**, zero reversal |
+| Position drift (V6), 8% tempo error | Chopin **1.19 → 0.85 systems** (fail → pass) |
+
+Details — including what *failed* — are in [docs/ALGORITHM.md](docs/ALGORITHM.md) §8.
+
+### Three design assumptions that measurement overturned
+
+Each is recorded as a reversal in the docs rather than quietly edited away.
+
+1. **"Barline over-detection isn't fatal, because monotonicity survives."** Monotonicity does survive — but the *scale* breaks. Detecting Chopin's 73 measures as 89 stretches the beat axis by 1.22×, and by the end of the piece the mapping is two systems off. Fixed by separating scale from distribution: system-hit rate 0.260 → 0.890.
+
+2. **"ζ = 1 means no overshoot."** True for a step in position only. With velocity already loaded, the scroll overshoots and returns by `v/(2ζω)` when playing stops. Raising ζ trades 40% less reversal for 1.9× the peak acceleration, so ζ = 1 stays — now with numbers behind it.
+
+3. **Sections 6.2 and 6.3 contradict each other.** Jump suppression triggers at one system of disagreement, but the search range is ±2 measures — half the threshold. The rule cannot fire at grade B. Kept for grade A, and both facts are pinned by tests.
+
+The most useful lesson, also written into the docs: **in a complementary filter the danger is not a wrong estimate but a wrong confidence.** Position estimation ran away twice (21× worse than integration alone at its worst), and both times the estimator was fine — the confidence calculation was not.
+
+## Build and verify
+
+No external C++ dependencies. The test harness is self-contained, so it builds without network access.
+
+```bash
+cmake -S . -B build -G Ninja
+cmake --build build
+./build/core/tests/nota_core_tests
+```
+
+With sanitizers:
+
+```bash
+cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DNOTA_SANITIZE=ON
+cmake --build build-asan && ./build-asan/core/tests/nota_core_tests
+```
+
+Analyze a real page (PDF → PGM first):
+
+```bash
+pdftoppm -gray -r 200 -f 1 -l 1 score.pdf page
+./build/tools/nota-analyze page-1.pgm --overlay overlay.ppm
+```
+
+Simulate a performance end to end:
+
+```bash
+./build/tools/nota-simulate page-1.pgm page-2.pgm --beats 4 --total-beats 136 \
+    --tempo 100 --estimate --tempo-error 0.03 --trace trace.csv
+```
+
+Warnings are strict (`-Wall -Wextra -Wpedantic -Wconversion -Wshadow`) and kept at zero.
+
+Generating the verification scores and scoring the detectors needs Python:
+
+```bash
+pip3 install verovio music21 cairosvg numpy pillow
+python3 prototype/make_fixtures.py --out prototype/out/scores
+```
+
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the full harness.
+
+## Platform support
+
+| Platform | Minimum | Priority |
+|---|---|---|
+| iOS / iPadOS | 17.0 | First |
+| Android | API 29 (Android 10) | Second |
+
+iOS ships first: the iPad dominates this category, and uniform hardware removes variables while the algorithms are still being validated. The core has been platform-neutral since the first commit, so this is not a "port it later" plan.
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/DESIGN.md](docs/DESIGN.md) | Architecture, platform strategy, technical decisions, risks, roadmap |
+| [docs/ALGORITHM.md](docs/ALGORITHM.md) | Signal processing, CV and control algorithms; verification items and results |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Environment, verification harness, current state, open tasks |
+| [docs/decisions/](docs/decisions/) | Architecture decision records |
+
+## License
+
+Undecided.
