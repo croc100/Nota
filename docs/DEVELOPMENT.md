@@ -76,6 +76,28 @@ python3 prototype/evaluate_page.py \
 
 기대값은 `ALGORITHM.md` 8.0절의 표와 같아야 한다.
 
+### 시간↔픽셀 매핑 채점
+
+박 위치를 정답으로 주고 "매핑이 올바른 시스템을 가리키는가"를 센다. 오디오
+없이 매핑만 떼어 측정하므로 V6의 전제 조건을 먼저 확인할 수 있다.
+
+```
+python3 prototype/evaluate_geometry.py --beats 3 --true-length \
+    prototype/out/scores/chopin_mazurka06_2_p1.svg:prototype/out/scores/chopin_mazurka06_2_p1.pgm \
+    prototype/out/scores/chopin_mazurka06_2_p2.svg:prototype/out/scores/chopin_mazurka06_2_p2.pgm
+```
+
+기대값은 `ALGORITHM.md` 8.3절의 표와 같다. `--true-length`를 빼면 곡 길이를
+검출된 마디 수에서 유도하며, 과검출이 축척 오차로 번지는 것을 그대로 볼 수
+있다(Chopin 적중률 0.890 → 0.260).
+
+매핑 자체를 눈으로 보려면 곡선을 덤프한다. 계단(멈춤→점프)이 아니라 꺾인
+직선들이 이어진 모양이어야 하고, 꺾이는 지점이 시스템 경계와 맞아야 한다.
+
+```
+./build/tools/nota-geometry page-1.pgm page-2.pgm --beats 4 --curve curve.csv
+```
+
 ### 열화 내성
 
 ```
@@ -111,30 +133,36 @@ pdftoppm -gray -r 200 -f 1 -l 1 score.pdf page   # page-1.pgm
 | `nota::EstimateSkewDegrees` / `RotateGray` | 기울기 추정·보정 |
 | `nota::DetectStaves` | 오선 검출 |
 | `nota::AnalyzePageGray` | 전처리~마디 상자까지 전체 경로 + 자체 품질 평가 |
+| `nota::ScoreGeometry` | 시간↔픽셀 매핑. 시스템 단위 보간, 양방향 변환 |
 | `nota-analyze` | 페이지 분석 CLI |
+| `nota-geometry` | 여러 페이지 → 매핑 CLI (`--curve`로 박→y 곡선 덤프) |
 
-측정 결과는 `ALGORITHM.md` 8.0(V1/V2), 8.1(열화 내성), 8.2(품질 평가).
+측정 결과는 `ALGORITHM.md` 8.0(V1/V2), 8.1(열화 내성), 8.2(품질 평가),
+8.3(매핑).
 
-### 다음 — 시간↔픽셀 매핑
+### 다음 — 스크롤 제어기
 
-`core/include/nota/score_geometry.hpp`에 **설계와 API만** 들어 있고 구현이
-없다. 헤더 주석에 핵심 결정의 근거가 적혀 있으니 먼저 읽을 것.
-
-요점: 시스템 안에서 음악은 가로로 진행하지만 스크롤은 세로로 움직인다. 연주
-위치를 그대로 y로 옮기면 "멈춤 → 점프"가 반복된다. 한 시스템을 연주하는 동안
-y가 시스템 하나 높이만큼 연속으로 흐르게 보간한다.
+`ALGORITHM.md` 7절. 입력이 숫자뿐이므로 오디오도 이미지도 없이 단위 테스트가
+된다. 매핑이 끝났으니 `PixelsPerBeat`(7.3절 피드포워드)와 `BeatAt`(7.5절 수동
+개입)을 바로 쓸 수 있다.
 
 구현할 것:
 
-1. `core/src/score_geometry.cpp` — `Build`, `CanvasY`, `BeatAt`,
-   `PixelsPerBeat`, `SystemAt`
-2. `core/CMakeLists.txt`에 소스 추가
-3. `core/tests/test_score_geometry.cpp` — 단조성, `BeatAt(CanvasY(b)) == b`
-   왕복, 페이지 이어붙이기 오프셋, 범위 밖 고정, 두 가지 시간 배분 방식
-4. 여러 페이지를 받아 매핑을 내보내는 CLI (`nota-geometry`)
+1. `core/include/nota/scroll_control.hpp` / `src/scroll_control.cpp` —
+   임계 감쇠 스프링(7.2), 속도 피드포워드(7.3), 속도 제한(7.4), 수동 개입(7.5)
+2. 테스트 — 정상상태 오차가 0에 수렴하는지, 오버슈트가 없는지, 템포 점프에서
+   속도 제한이 걸리는지, 손 스크롤 후 위치가 인수되는지
+3. 매핑과 묶은 시뮬레이션 — 정답 박 곡선을 주고 스크롤 y 궤적을 CSV로 덤프.
+   `prototype/evaluate_geometry.py`가 매핑을 채점한 것과 같은 방식이다.
 
-그 다음은 스크롤 제어기(`ALGORITHM.md` 7절). 입력이 숫자뿐이라 오디오 없이
-단위 테스트가 된다.
+### 알려진 과제 — 짧은 시스템을 놓친다
+
+Bach 2페이지 마지막 시스템은 마디가 하나뿐이라 페이지 폭의 14%만 차지하고, 행
+투영 기반 오선 검출이 이를 찾지 못한다(`ALGORITHM.md` 8.3 말미). 곡 끝에서 한
+시스템이 빈다.
+
+행 투영 임계를 낮추면 8.1절의 열화 내성이 함께 내려갈 수 있다. 추측으로 숫자를
+만지지 말고, 임계를 쓸어보며 두 지표를 같이 측정해서 정할 것.
 
 ### 녹음이 와야 가능한 것
 

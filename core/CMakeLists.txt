@@ -10,6 +10,7 @@ add_library(nota_core
   src/staff_detect.cpp
   src/page_analysis.cpp
   src/skew.cpp
+  src/score_geometry.cpp
 )
 
 target_include_directories(nota_core PUBLIC include)

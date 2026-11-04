@@ -8,3 +8,6 @@ target_link_libraries(nota_tools_io PUBLIC nota_core PRIVATE nota_flags)
 
 add_executable(nota-analyze nota_analyze.cpp)
 target_link_libraries(nota-analyze PRIVATE nota_core nota_tools_io nota_flags)
+
+add_executable(nota-geometry nota_geometry.cpp)
+target_link_libraries(nota-geometry PRIVATE nota_core nota_tools_io nota_flags)
