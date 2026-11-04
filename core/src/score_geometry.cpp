@@ -20,6 +20,43 @@ constexpr double kMinWeight = 1e-9;
 // 위해서다.
 constexpr double kMinAnchorGap = 1e-3;
 
+double ContentTop(const std::vector<System>& systems) {
+  double top = systems.front().y_top;
+  for (const System& s : systems) top = std::min(top, s.y_top);
+  return top;
+}
+
+double ContentBottom(const std::vector<System>& systems) {
+  double bottom = systems.front().y_bottom;
+  for (const System& s : systems) bottom = std::max(bottom, s.y_bottom);
+  return bottom;
+}
+
+// 잘라낸 페이지의 위아래에 남길 여백.
+//
+// 그 페이지의 시스템 사이 간격 중앙값의 절반을 쓴다. 그러면 페이지를 넘는
+// 자리의 간격이 페이지 안의 간격과 같아지고, 페이지 경계에서 y 전진이 튀지
+// 않는다. 간격을 알 수 없는 한 장짜리 페이지에서는 오선 간격으로 대신한다
+// (오선 한 묶음의 높이가 8 × 오선 간격이므로 그 절반).
+double PageMargin(const std::vector<System>& systems) {
+  std::vector<const System*> sorted;
+  sorted.reserve(systems.size());
+  for (const System& s : systems) sorted.push_back(&s);
+  std::sort(sorted.begin(), sorted.end(),
+            [](const System* a, const System* b) { return a->y_top < b->y_top; });
+
+  // 이웃한 두 시스템 사이의 실제 빈 공간.
+  std::vector<double> gaps;
+  for (std::size_t i = 1; i < sorted.size(); ++i) {
+    gaps.push_back(sorted[i]->y_top - sorted[i - 1]->y_bottom);
+  }
+  if (!gaps.empty()) {
+    std::nth_element(gaps.begin(), gaps.begin() + gaps.size() / 2, gaps.end());
+    return std::max(0.0, gaps[gaps.size() / 2] / 2.0);
+  }
+  return 4.0 * std::max(0.0, systems.front().staff_space);
+}
+
 // 캔버스에서 시스템 i를 연주하는 동안 y가 가야 할 끝점.
 //
 // 시스템 i의 시작 y에서 시스템 i+1의 시작 y까지 흐르게 한다. 시스템 사이의
@@ -41,9 +78,35 @@ ScoreGeometry ScoreGeometry::Build(const std::vector<PageAnalysis>& pages,
   if (params.beats_per_measure <= 0.0) return geom;
 
   // 1. 페이지를 세로로 이어붙여 캔버스 좌표로 옮긴다.
-  double offset = 0.0;
+  double canvas_cursor = 0.0;
   for (std::size_t p = 0; p < pages.size(); ++p) {
     const PageAnalysis& page = pages[p];
+
+    GeometryPage slot;
+    slot.index = static_cast<int>(p);
+    slot.src_y_top = 0.0;
+    slot.src_y_bottom = static_cast<double>(page_heights[p]);
+    slot.has_content = !page.systems.empty();
+    if (params.trim_page_margins) {
+      // 내용 바깥의 빈 여백을 잘라낸다. 자르지 않으면 그 페이지의 마지막
+      // 시스템을 연주하는 동안 빈 공간까지 지나야 하고, 실측에서 그 시스템의
+      // y 전진이 피치의 449%까지 커졌다 (score_geometry.hpp).
+      if (!slot.has_content) {
+        // 시스템이 없는 페이지는 캔버스를 차지하지 않는다. 빈 페이지를 넣었다고
+        // 스크롤이 빈 공간을 질주하게 만들 이유가 없다.
+        slot.src_y_bottom = slot.src_y_top;
+      } else {
+        slot.src_y_top = ContentTop(page.systems);
+        slot.src_y_bottom = ContentBottom(page.systems);
+        const double margin = PageMargin(page.systems);
+        slot.src_y_top = std::max(0.0, slot.src_y_top - margin);
+        slot.src_y_bottom = std::min(static_cast<double>(page_heights[p]),
+                                     slot.src_y_bottom + margin);
+      }
+    }
+    slot.offset = canvas_cursor - slot.src_y_top;
+    const double offset = slot.offset;
+    geom.pages_.push_back(slot);
 
     // 페이지 안의 시스템은 위에서 아래 순서여야 한다. 분석기가 이미 그 순서로
     // 내놓지만, 매핑의 단조성이 여기에 의존하므로 믿지 않고 정렬한다.
@@ -75,11 +138,14 @@ ScoreGeometry ScoreGeometry::Build(const std::vector<PageAnalysis>& pages,
       geom.systems_.push_back(out);
     }
 
-    offset += static_cast<double>(page_heights[p]) + params.page_gap;
+    const double span = slot.src_y_bottom - slot.src_y_top;
+    canvas_cursor += span;
+    // 내용이 없는 페이지에는 간격도 주지 않는다.
+    if (span > 0.0) canvas_cursor += params.page_gap;
   }
   if (geom.systems_.empty()) return geom;
 
-  geom.canvas_height_ = offset - params.page_gap;
+  geom.canvas_height_ = std::max(0.0, canvas_cursor - params.page_gap);
 
   // 2. 시스템에 악보상 시간을 배분한다.
   //
@@ -93,10 +159,11 @@ ScoreGeometry ScoreGeometry::Build(const std::vector<PageAnalysis>& pages,
   if (total_measures == 0) total_measures = static_cast<int>(geom.systems_.size());
   // 축척은 분포와 분리한다. 외부에서 길이를 주면 그것을 쓴다 — 과검출이
   // 축척 오차가 되지 않게 하는 유일한 장치다 (score_geometry.hpp).
+  geom.scale_from_detection_ = !(params.total_beats_override > 0.0);
   geom.total_beats_ =
-      params.total_beats_override > 0.0
-          ? params.total_beats_override
-          : static_cast<double>(total_measures) * params.beats_per_measure;
+      geom.scale_from_detection_
+          ? static_cast<double>(total_measures) * params.beats_per_measure
+          : params.total_beats_override;
 
   std::vector<double> weights(geom.systems_.size(), 0.0);
   double weight_sum = 0.0;

@@ -11,6 +11,7 @@
 //
 // 코어를 그대로 호출한다. 여기에 알고리즘이 없다.
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -31,6 +32,7 @@ void PrintUsage() {
                "  --beats <f>        한 마디의 박 수 (기본 4)\n"
                "  --page-gap <f>     페이지 사이 간격 px (기본 0)\n"
                "  --total-beats <f>  곡 전체 길이(박)를 직접 지정. 0이면 검출에서 유도\n"
+               "  --no-trim          페이지 여백을 자르지 않는다 (경계에서 전진이 튄다)\n"
                "  --weight <mode>    시간 배분 기준: measures | ink (기본 measures)\n"
                "  --curve <out.csv>  박→y 곡선 덤프 (beat,canvas_y,px_per_beat)\n"
                "  --curve-steps <n>  곡선 샘플 수 (기본 2000)\n"
@@ -57,6 +59,8 @@ void PrintJson(const nota::ScoreGeometry& geom,
   std::printf("  \"page_count\": %zu,\n", pages.size());
   std::printf("  \"canvas_height\": %.2f,\n", geom.canvas_height());
   std::printf("  \"total_beats\": %.3f,\n", geom.total_beats());
+  std::printf("  \"scale_from_detection\": %s,\n",
+              geom.scale_from_detection() ? "true" : "false");
   std::printf("  \"system_count\": %zu,\n", geom.systems().size());
   std::printf("  \"measure_count\": %zu,\n", geom.measures().size());
 
@@ -78,6 +82,34 @@ void PrintJson(const nota::ScoreGeometry& geom,
   }
   std::printf("  ],\n");
 
+  // 페이지 배치. 비트맵을 그리는 쪽이 쓰는 정보다.
+  std::printf("  \"page_slots\": [\n");
+  for (std::size_t i = 0; i < geom.pages().size(); ++i) {
+    const nota::GeometryPage& pg = geom.pages()[i];
+    std::printf(
+        "    { \"index\": %d, \"has_content\": %s, \"src_y\": [%.2f, %.2f], "
+        "\"offset\": %.2f }%s\n",
+        pg.index, pg.has_content ? "true" : "false", pg.src_y_top, pg.src_y_bottom,
+        pg.offset, i + 1 < geom.pages().size() ? "," : "");
+  }
+  std::printf("  ],\n");
+
+  // 시스템마다의 y 전진과, 그 중앙값에 대한 비율. 비율이 1에서 크게 벗어나면
+  // 그 시스템을 연주하는 동안 스크롤이 튄다 — 페이지 경계에서 가장 잘 생긴다
+  // (ALGORITHM.md 8.3).
+  std::vector<double> advance;
+  for (std::size_t i = 0; i + 1 < geom.systems().size(); ++i) {
+    advance.push_back(geom.systems()[i + 1].canvas_y_top -
+                      geom.systems()[i].canvas_y_top);
+  }
+  double median_advance = 0.0;
+  if (!advance.empty()) {
+    std::vector<double> tmp = advance;
+    std::nth_element(tmp.begin(), tmp.begin() + tmp.size() / 2, tmp.end());
+    median_advance = tmp[tmp.size() / 2];
+  }
+  std::printf("  \"median_system_advance\": %.2f,\n", median_advance);
+
   std::printf("  \"systems\": [\n");
   for (std::size_t i = 0; i < geom.systems().size(); ++i) {
     const nota::GeometrySystem& s = geom.systems()[i];
@@ -85,10 +117,13 @@ void PrintJson(const nota::ScoreGeometry& geom,
         "    { \"index\": %zu, \"page\": %d, \"in_page\": %d, "
         "\"canvas_y\": [%.2f, %.2f], \"x\": [%.2f, %.2f], "
         "\"measures\": %d, \"ink\": %lld, \"beats\": [%.3f, %.3f], "
-        "\"px_per_beat\": %.4f }%s\n",
+        "\"px_per_beat\": %.4f, \"advance\": %.2f, \"advance_ratio\": %.3f }%s\n",
         i, s.page_index, s.index_in_page, s.canvas_y_top, s.canvas_y_bottom,
         s.x_start, s.x_end, s.measure_count, s.ink_density, s.beat_start,
         s.beat_end, geom.PixelsPerBeat((s.beat_start + s.beat_end) / 2.0),
+        i < advance.size() ? advance[i] : 0.0,
+        (i < advance.size() && median_advance > 0.0) ? advance[i] / median_advance
+                                                     : 0.0,
         i + 1 < geom.systems().size() ? "," : "");
   }
   std::printf("  ],\n");
@@ -136,6 +171,8 @@ int main(int argc, char** argv) {
       params.page_gap = std::atof(next(arg));
     } else if (std::strcmp(arg, "--total-beats") == 0) {
       params.total_beats_override = std::atof(next(arg));
+    } else if (std::strcmp(arg, "--no-trim") == 0) {
+      params.trim_page_margins = false;
     } else if (std::strcmp(arg, "--weight") == 0) {
       const char* mode = next(arg);
       if (std::strcmp(mode, "measures") == 0) {
@@ -208,6 +245,17 @@ int main(int argc, char** argv) {
       return 1;
     }
     std::fprintf(stderr, "curve written: %s\n", curve_path.c_str());
+  }
+
+  // 조용히 틀리지 않게 한다. 검출에서 축척을 유도한 경우가 실측에서 가장 크게
+  // 틀렸던 조건이다 (ALGORITHM.md 8.3).
+  if (geom.scale_from_detection()) {
+    std::fprintf(stderr,
+                 "주의: 곡 길이를 검출된 마디 수(%zu개)에서 유도했다. 마디선 "
+                 "과검출이 그대로 축척 오차가 된다.\n"
+                 "      실제 총 마디 수를 안다면 --total-beats <마디 수 × 박>을 "
+                 "주는 편이 낫다.\n",
+                 geom.measures().size());
   }
 
   if (!quiet) PrintJson(geom, pages);

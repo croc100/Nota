@@ -98,6 +98,11 @@ python3 prototype/evaluate_geometry.py --beats 3 --true-length \
 ./build/tools/nota-geometry page-1.pgm page-2.pgm --beats 4 --curve curve.csv
 ```
 
+JSON의 `advance_ratio`는 시스템마다의 y 전진을 중앙값으로 나눈 값이다. 1에서
+크게 벗어나는 시스템이 있으면 그 줄을 연주하는 동안 스크롤이 튄다. `--no-trim`을
+주면 페이지 여백을 자르지 않아 이 값이 페이지 경계에서 4.49까지 올라가는 것을
+볼 수 있다(`ALGORITHM.md` 8.3).
+
 ### 열화 내성
 
 ```

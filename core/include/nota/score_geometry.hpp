@@ -33,6 +33,24 @@ struct ScoreGeometryParams {
   // 페이지를 이어붙일 때 페이지 사이에 두는 간격(px). 0이면 딱 붙인다.
   double page_gap = 0.0;
 
+  // 페이지를 붙일 때 내용 바깥의 빈 여백을 잘라낸다.
+  //
+  // 끄면 페이지 비트맵을 높이 그대로 붙인다. 그러면 **그 페이지의 마지막
+  // 시스템을 연주하는 동안** 아래쪽 빈 여백과 다음 페이지의 위쪽 여백을 모두
+  // 지나야 한다. 실측(Bach BWV846, 마지막 검출 시스템이 y=1039, 페이지 높이
+  // 2339): 그 시스템의 y 전진이 시스템 피치의 **449%**, 즉 116.8 px/박 대
+  // 이웃 27.8 px/박. 연주자는 한 줄을 연주하는 사이 4.5배 속도로 끌려간다
+  // (ALGORITHM.md 8.3).
+  //
+  // 악장 끝 페이지, 시스템이 적은 페이지에서 흔한 배치이므로 기본으로 켠다.
+  // 켜면 각 페이지는 [첫 시스템 위 - 여백, 마지막 시스템 아래 + 여백]만
+  // 차지하고, 여백은 그 페이지의 시스템 간 간격 중앙값의 절반이다. 시스템이
+  // 없는 페이지는 캔버스를 차지하지 않는다.
+  //
+  // 켜면 캔버스 y가 페이지 비트맵의 y와 더 이상 "누적 높이"로 이어지지 않는다.
+  // 비트맵을 그리는 쪽은 pages()의 오프셋과 잘라낸 구간을 써야 한다.
+  bool trim_page_margins = true;
+
   // 곡 전체 길이(박). 0이면 검출된 마디 수 × beats_per_measure로 유도한다.
   //
   // 이 필드가 필요한 이유 — 검출된 마디 수로 길이를 유도하면 마디선 과검출이
@@ -61,6 +79,19 @@ struct ScoreGeometryParams {
     kInkDensity,
   };
   TimeWeight time_weight = TimeWeight::kMeasureCount;
+};
+
+// 페이지 하나가 캔버스에서 차지하는 자리.
+//
+// 비트맵을 그리는 쪽에 필요한 정보다. 캔버스 좌표를 페이지 비트맵의 좌표로
+// 되돌리려면 canvas_y - offset을 쓰고, 그릴 구간은 [src_y_top, src_y_bottom]다.
+// 여백을 잘라내면 이 구간이 페이지 전체보다 좁다.
+struct GeometryPage {
+  int index = 0;           // 입력 페이지 순번
+  double src_y_top = 0.0;  // 페이지 비트맵에서 캔버스에 올라간 구간
+  double src_y_bottom = 0.0;
+  double offset = 0.0;       // canvas_y = page_y + offset
+  bool has_content = false;  // 시스템이 없으면 거짓 — 캔버스를 차지하지 않는다
 };
 
 // 이어붙인 캔버스 좌표계에서의 시스템 하나.
@@ -102,10 +133,24 @@ class ScoreGeometry {
 
   bool empty() const { return systems_.empty(); }
   double total_beats() const { return total_beats_; }
+
+  // 곡 길이를 검출된 마디 수에서 유도했는가.
+  //
+  // 참이면 마디선 과검출이 그대로 축척 오차가 된다 — 실측에서 시스템 적중률이
+  // 0.890에서 0.260으로 떨어졌다(ALGORITHM.md 8.3). 조용히 틀리지 않도록
+  // 호출자가 알 수 있게 내놓는다. PageQuality와 같은 성격의 신호다.
+  //
+  // 참일 때 호출자가 할 일: 사용자에게 총 마디 수를 묻거나, 템포 × 연주 시간으로
+  // 계산해 total_beats_override에 넣고 다시 만든다.
+  bool scale_from_detection() const { return scale_from_detection_; }
   double canvas_height() const { return canvas_height_; }
 
   const std::vector<GeometrySystem>& systems() const { return systems_; }
   const std::vector<GeometryMeasure>& measures() const { return measures_; }
+
+  // 페이지 비트맵을 캔버스에 배치하는 데 필요한 정보. 입력 페이지와 같은
+  // 순서이고 같은 개수다 (내용이 없는 페이지도 has_content=false로 들어간다).
+  const std::vector<GeometryPage>& pages() const { return pages_; }
 
   // 악보상 위치(박) → 캔버스 y. 단조 증가하며, 범위 밖은 양 끝으로 고정된다.
   double CanvasY(double beat) const;
@@ -126,9 +171,11 @@ class ScoreGeometry {
   // 보간의 기준점. 시스템 i의 시작 y가 anchor_[i]이고, 마지막 원소는 곡의 끝
   // y다. 따라서 길이는 systems_.size() + 1이다.
   std::vector<double> anchors_;
+  std::vector<GeometryPage> pages_;
   std::vector<GeometrySystem> systems_;
   std::vector<GeometryMeasure> measures_;
   double total_beats_ = 0.0;
+  bool scale_from_detection_ = true;
   double canvas_height_ = 0.0;
 };
 

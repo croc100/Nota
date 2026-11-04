@@ -162,13 +162,15 @@ NOTA_TEST(GeometryRoundTripsBeatAndCanvasY) {
   }
 }
 
-// 페이지 이어붙이기. 두 번째 페이지의 좌표에 첫 페이지 높이가 더해져야 한다.
+// 페이지 이어붙이기 (여백을 자르지 않을 때). 두 번째 페이지의 좌표에 첫 페이지
+// 높이가 그대로 더해져야 한다.
 NOTA_TEST(GeometryConcatenatesPages) {
   const PageAnalysis p1 = MakePage(2, {4, 4});
   const PageAnalysis p2 = MakePage(2, {4, 4});
 
   ScoreGeometryParams params;
   params.page_gap = 30.0;
+  params.trim_page_margins = false;
   const ScoreGeometry geom = ScoreGeometry::Build({p1, p2}, {1000, 1000}, params);
 
   CHECK_EQ(geom.systems().size(), static_cast<std::size_t>(4));
@@ -194,6 +196,97 @@ NOTA_TEST(GeometryConcatenatesPages) {
     }
   }
   CHECK(saw_page2_measure);
+
+  // 자르지 않으면 페이지 경계 시스템의 y 전진이 다른 시스템보다 크다.
+  // 이것이 아래 테스트가 고치는 결함이다.
+  const double inner = geom.systems()[1].canvas_y_top - geom.systems()[0].canvas_y_top;
+  const double across = geom.systems()[2].canvas_y_top - geom.systems()[1].canvas_y_top;
+  CHECK(across > inner * 2.0);
+}
+
+// 페이지 여백 잘라내기 (기본). 페이지 경계에서 y 전진이 튀지 않아야 한다.
+//
+// 자르지 않으면 그 페이지의 마지막 시스템을 연주하는 동안 페이지 아래 빈 공간
+// 전체를 지나야 한다. 실측에서 피치의 449%까지 커졌다 (ALGORITHM.md 8.3).
+NOTA_TEST(GeometryTrimsPageMarginsSoPageBreaksDoNotRace) {
+  // 두 번째 페이지가 위쪽에만 내용이 있고 아래가 비어 있는 경우 —
+  // 악장 끝 페이지에서 흔한 배치다.
+  const PageAnalysis p1 = MakePage(4, {4, 4, 4, 4});
+  const PageAnalysis p2 = MakePage(2, {4, 4});
+  const PageAnalysis p3 = MakePage(3, {4, 4, 4});
+
+  const ScoreGeometry geom = ScoreGeometry::Build({p1, p2, p3}, {2339, 2339, 2339});
+  CHECK_EQ(geom.systems().size(), static_cast<std::size_t>(9));
+
+  // 시스템마다의 y 전진을 모아 본다. 마지막 시스템은 다음이 없으므로 제외한다.
+  std::vector<double> advance;
+  for (std::size_t i = 0; i + 1 < geom.systems().size(); ++i) {
+    advance.push_back(geom.systems()[i + 1].canvas_y_top -
+                      geom.systems()[i].canvas_y_top);
+  }
+  double lo = advance[0];
+  double hi = advance[0];
+  for (double a : advance) {
+    lo = std::fmin(lo, a);
+    hi = std::fmax(hi, a);
+  }
+  // 페이지 안이든 경계든 전진이 고르다. 449%가 아니라 100% 근처여야 한다.
+  CHECK(hi <= lo * 1.05);
+
+  // 페이지 배치 정보가 입력과 같은 개수·순서로 나온다.
+  CHECK_EQ(geom.pages().size(), static_cast<std::size_t>(3));
+  for (std::size_t i = 0; i < geom.pages().size(); ++i) {
+    CHECK_EQ(geom.pages()[i].index, static_cast<int>(i));
+    CHECK(geom.pages()[i].has_content);
+    CHECK(geom.pages()[i].src_y_top >= 0.0);
+    CHECK(geom.pages()[i].src_y_bottom <= 2339.0);
+    CHECK(geom.pages()[i].src_y_bottom > geom.pages()[i].src_y_top);
+  }
+  // 캔버스 높이는 올라간 구간의 합이다 (잘린 뒤라 페이지 높이 합보다 작다).
+  double span_sum = 0.0;
+  for (const nota::GeometryPage& pg : geom.pages()) {
+    span_sum += pg.src_y_bottom - pg.src_y_top;
+  }
+  CHECK_NEAR(geom.canvas_height(), span_sum, 1e-9);
+  CHECK(geom.canvas_height() < 3.0 * 2339.0);
+
+  // 오프셋으로 캔버스 좌표를 페이지 좌표로 되돌릴 수 있다 — 비트맵을 그리는
+  // 쪽이 쓰는 경로다.
+  for (const GeometrySystem& s : geom.systems()) {
+    const nota::GeometryPage& pg = geom.pages()[static_cast<std::size_t>(s.page_index)];
+    const double page_y = s.canvas_y_top - pg.offset;
+    CHECK(page_y >= pg.src_y_top - 1e-9);
+    CHECK(page_y <= pg.src_y_bottom + 1e-9);
+  }
+}
+
+// 시스템이 없는 페이지는 캔버스를 차지하지 않는다. 빈 페이지(표지, 공백)를
+// 넣었다고 스크롤이 빈 공간을 질주하면 안 된다.
+NOTA_TEST(GeometrySkipsEmptyPages) {
+  const PageAnalysis blank;
+  const PageAnalysis p1 = MakePage(3, {4, 4, 4});
+  const PageAnalysis p2 = MakePage(3, {4, 4, 4});
+
+  const ScoreGeometry geom =
+      ScoreGeometry::Build({blank, p1, blank, p2}, {2339, 2339, 2339, 2339});
+  CHECK_EQ(geom.systems().size(), static_cast<std::size_t>(6));
+  CHECK_EQ(geom.pages().size(), static_cast<std::size_t>(4));
+  CHECK(!geom.pages()[0].has_content);
+  CHECK(!geom.pages()[2].has_content);
+  CHECK_NEAR(geom.pages()[0].src_y_bottom - geom.pages()[0].src_y_top, 0.0, 1e-9);
+
+  std::vector<double> advance;
+  for (std::size_t i = 0; i + 1 < geom.systems().size(); ++i) {
+    advance.push_back(geom.systems()[i + 1].canvas_y_top -
+                      geom.systems()[i].canvas_y_top);
+  }
+  double lo = advance[0];
+  double hi = advance[0];
+  for (double a : advance) {
+    lo = std::fmin(lo, a);
+    hi = std::fmax(hi, a);
+  }
+  CHECK(hi <= lo * 1.05);
 }
 
 // 범위 밖은 양 끝으로 고정된다. 오디오 추정이 음수 박이나 곡 길이 초과를
@@ -316,6 +409,11 @@ NOTA_TEST(GeometryTotalBeatsOverrideFixesScale) {
   negative.total_beats_override = -10.0;
   CHECK_NEAR(ScoreGeometry::Build({clean}, {1000}, negative).total_beats(), 48.0,
              1e-9);
+
+  // 어느 쪽 축척을 썼는지 호출자가 알 수 있다. 조용히 틀리지 않게 하는 신호다.
+  CHECK(naive.scale_from_detection());
+  CHECK(!fixed.scale_from_detection());
+  CHECK(ScoreGeometry::Build({clean}, {1000}, negative).scale_from_detection());
 }
 
 // 퇴화 입력에서 조용히 터지지 않는다.
