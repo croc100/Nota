@@ -164,6 +164,21 @@ class ScoreGeometry {
   // (ALGORITHM.md 7.3). 시스템마다 다르므로 상수가 아니다.
   double PixelsPerBeat(double beat) const;
 
+  // 두 박 사이에 있는 잉크의 총량.
+  //
+  // 재동기화(ALGORITHM.md 6.2)가 "이 구간에 음이 얼마나 빽빽한가"를 묻는 데
+  // 쓴다. 마디 눈금을 가진 쪽이 답해야 하므로 여기에 둔다.
+  //
+  // 마디 경계에 걸치는 부분은 박 길이에 비례해 나눈다. 마디 안에서 음이 고르게
+  // 퍼져 있다고 가정하는 것이며, 그보다 세밀한 정보는 음표를 인식해야 얻는다.
+  // 마디가 검출되지 않았으면 0을 돌려준다 — 호출자는 재동기화를 건너뛴다.
+  double InkBetween(double beat_from, double beat_to) const;
+
+  // 해당 박 위치에서 마디 하나의 길이(박). 재동기화 탐색 범위를 "±2마디"로
+  // 잡는 데 쓴다. 시스템마다 마디 수가 다르므로 상수가 아니다.
+  // 마디가 없으면 그 시스템 전체 길이를 돌려준다.
+  double BeatsPerMeasureAt(double beat) const;
+
   // 해당 박이 속한 시스템 인덱스. 범위 밖이면 양 끝 시스템.
   int SystemAt(double beat) const;
 
@@ -174,6 +189,9 @@ class ScoreGeometry {
   std::vector<GeometryPage> pages_;
   std::vector<GeometrySystem> systems_;
   std::vector<GeometryMeasure> measures_;
+  // measures_의 잉크 누적합. ink_prefix_[i]는 마디 i 앞까지의 총합이고 길이는
+  // measures_.size() + 1이다. InkBetween을 O(log n)으로 만든다.
+  std::vector<double> ink_prefix_;
   double total_beats_ = 0.0;
   bool scale_from_detection_ = true;
   double canvas_height_ = 0.0;

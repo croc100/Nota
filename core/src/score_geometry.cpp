@@ -257,7 +257,73 @@ ScoreGeometry ScoreGeometry::Build(const std::vector<PageAnalysis>& pages,
     }
   }
 
+  // 5. 잉크 누적합. 재동기화가 구간 잉크를 O(log n)으로 묻는다.
+  geom.ink_prefix_.assign(geom.measures_.size() + 1, 0.0);
+  for (std::size_t i = 0; i < geom.measures_.size(); ++i) {
+    geom.ink_prefix_[i + 1] =
+        geom.ink_prefix_[i] + static_cast<double>(geom.measures_[i].ink_density);
+  }
+
   return geom;
+}
+
+namespace {
+
+// beat가 속한 마디 인덱스. 마디는 beat_start 기준 단조 증가한다.
+// 범위 밖이면 양 끝 마디.
+std::size_t MeasureIndexAt(const std::vector<GeometryMeasure>& measures,
+                           double beat) {
+  if (measures.empty()) return 0;
+  std::size_t lo = 0;
+  std::size_t hi = measures.size() - 1;
+  while (lo < hi) {
+    const std::size_t mid = (lo + hi + 1) / 2;
+    if (measures[mid].beat_start <= beat) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return lo;
+}
+
+}  // namespace
+
+double ScoreGeometry::InkBetween(double beat_from, double beat_to) const {
+  if (measures_.empty()) return 0.0;
+  if (beat_to < beat_from) std::swap(beat_from, beat_to);
+  const double lo = std::max(beat_from, measures_.front().beat_start);
+  const double hi = std::min(beat_to, measures_.back().beat_end);
+  if (!(hi > lo)) return 0.0;
+
+  const std::size_t i0 = MeasureIndexAt(measures_, lo);
+  const std::size_t i1 = MeasureIndexAt(measures_, hi);
+
+  // 한 마디 안에서 끝나는 경우.
+  const auto fraction = [](const GeometryMeasure& m, double a, double b) {
+    const double span = m.beat_end - m.beat_start;
+    if (!(span > 0.0)) return 0.0;
+    const double overlap = std::min(b, m.beat_end) - std::max(a, m.beat_start);
+    if (!(overlap > 0.0)) return 0.0;
+    return static_cast<double>(m.ink_density) * (overlap / span);
+  };
+
+  if (i0 == i1) return fraction(measures_[i0], lo, hi);
+
+  double total = fraction(measures_[i0], lo, hi) + fraction(measures_[i1], lo, hi);
+  // 사이에 온전히 들어가는 마디들은 누적합으로 한 번에 더한다.
+  if (i1 > i0 + 1) {
+    total += ink_prefix_[i1] - ink_prefix_[i0 + 1];
+  }
+  return total;
+}
+
+double ScoreGeometry::BeatsPerMeasureAt(double beat) const {
+  if (systems_.empty()) return 0.0;
+  const GeometrySystem& s = systems_[static_cast<std::size_t>(SystemAt(beat))];
+  const double span = s.beat_end - s.beat_start;
+  if (s.measure_count <= 0) return span;
+  return span / static_cast<double>(s.measure_count);
 }
 
 int ScoreGeometry::SystemAt(double beat) const {

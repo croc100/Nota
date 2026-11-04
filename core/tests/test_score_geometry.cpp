@@ -469,3 +469,76 @@ NOTA_TEST(GeometrySortsSystemsByY) {
   // 각 시스템이 자기 마디를 제대로 끌어왔다.
   for (const GeometrySystem& s : geom.systems()) CHECK_EQ(s.measure_count, 4);
 }
+
+// 구간 잉크 질의. 재동기화가 "이 구간에 음이 얼마나 빽빽한가"를 묻는다.
+NOTA_TEST(GeometryInkBetweenIsAdditiveAndProportional) {
+  // 시스템 3개 × 마디 4개, 마디마다 잉크 100 → 총 1200.
+  const PageAnalysis page = MakePage(3, {4, 4, 4});
+  const ScoreGeometry geom = ScoreGeometry::Build({page}, {1000});
+  CHECK_NEAR(geom.total_beats(), 48.0, 1e-9);
+
+  // 전체.
+  CHECK_NEAR(geom.InkBetween(0.0, 48.0), 1200.0, 1e-9);
+  // 범위 밖은 양 끝으로 잘린다.
+  CHECK_NEAR(geom.InkBetween(-100.0, 1000.0), 1200.0, 1e-9);
+  // 마디 하나 = 4박.
+  CHECK_NEAR(geom.InkBetween(0.0, 4.0), 100.0, 1e-9);
+  // 마디 안에서는 박 길이에 비례해 나뉜다.
+  CHECK_NEAR(geom.InkBetween(0.0, 2.0), 50.0, 1e-9);
+  CHECK_NEAR(geom.InkBetween(1.0, 3.0), 50.0, 1e-9);
+  // 여러 마디에 걸쳐도 더해진다.
+  CHECK_NEAR(geom.InkBetween(2.0, 10.0), 200.0, 1e-9);
+  // 인자 순서가 바뀌어도 같다.
+  CHECK_NEAR(geom.InkBetween(10.0, 2.0), 200.0, 1e-9);
+  // 폭이 0이면 0.
+  CHECK_NEAR(geom.InkBetween(5.0, 5.0), 0.0, 1e-9);
+
+  // 쪼개서 더한 것이 한 번에 구한 것과 같다 (가산성).
+  double sum = 0.0;
+  for (int i = 0; i < 48; ++i) {
+    sum += geom.InkBetween(static_cast<double>(i), static_cast<double>(i) + 1.0);
+  }
+  CHECK_NEAR(sum, 1200.0, 1e-6);
+
+  // 잉크가 시스템마다 다른 경우에도 구간이 맞는다.
+  PageAnalysis uneven = MakePage(2, {2, 2});
+  for (nota::Measure& m : uneven.measures) {
+    m.ink_density = (m.system_index == 0) ? 10 : 90;
+  }
+  const ScoreGeometry g2 = ScoreGeometry::Build({uneven}, {1000});
+  CHECK_NEAR(g2.total_beats(), 16.0, 1e-9);
+  CHECK_NEAR(g2.InkBetween(0.0, 8.0), 20.0, 1e-9);   // 시스템 0
+  CHECK_NEAR(g2.InkBetween(8.0, 16.0), 180.0, 1e-9);  // 시스템 1
+
+  // 마디가 없으면 0 — 호출자는 재동기화를 건너뛴다.
+  const PageAnalysis no_bars = MakePage(3, {0, 0, 0});
+  const ScoreGeometry g3 = ScoreGeometry::Build({no_bars}, {1000});
+  CHECK(g3.measures().empty());
+  CHECK_NEAR(g3.InkBetween(0.0, g3.total_beats()), 0.0, 1e-12);
+}
+
+// 마디 하나의 길이. 재동기화 탐색 범위를 "±2마디"로 잡는 데 쓴다.
+NOTA_TEST(GeometryBeatsPerMeasureVariesBySystem) {
+  // 시스템 0은 2마디, 시스템 1은 6마디 — 같은 높이를 서로 다른 눈금으로 나눈다.
+  const PageAnalysis page = MakePage(2, {2, 6});
+  const ScoreGeometry geom = ScoreGeometry::Build({page}, {1000});
+  // 총 8마디 × 4박 = 32박. 시스템 0에 8박, 시스템 1에 24박.
+  CHECK_NEAR(geom.BeatsPerMeasureAt(1.0), 4.0, 1e-9);
+  CHECK_NEAR(geom.BeatsPerMeasureAt(20.0), 4.0, 1e-9);
+
+  // 마디 수가 치우치면 마디 길이도 달라진다 — 길이를 외부에서 주면 그렇다.
+  ScoreGeometryParams params;
+  params.total_beats_override = 16.0;  // 실제로는 4마디뿐인 곡
+  const ScoreGeometry g2 = ScoreGeometry::Build({page}, {1000}, params);
+  CHECK_NEAR(g2.BeatsPerMeasureAt(1.0), 2.0, 1e-9);   // 4박을 2마디로
+  CHECK_NEAR(g2.BeatsPerMeasureAt(10.0), 2.0, 1e-9);  // 12박을 6마디로
+
+  // 마디가 없으면 시스템 전체 길이.
+  const PageAnalysis no_bars = MakePage(2, {0, 0});
+  const ScoreGeometry g3 = ScoreGeometry::Build({no_bars}, {1000});
+  CHECK_NEAR(g3.BeatsPerMeasureAt(1.0), g3.systems()[0].beat_end, 1e-9);
+
+  // 빈 기하에서 0.
+  CHECK_NEAR(ScoreGeometry().BeatsPerMeasureAt(0.0), 0.0, 1e-12);
+  CHECK_NEAR(ScoreGeometry().InkBetween(0.0, 10.0), 0.0, 1e-12);
+}

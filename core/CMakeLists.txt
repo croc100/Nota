@@ -12,6 +12,7 @@ add_library(nota_core
   src/skew.cpp
   src/score_geometry.cpp
   src/scroll_control.cpp
+  src/position_estimator.cpp
 )
 
 target_include_directories(nota_core PUBLIC include)

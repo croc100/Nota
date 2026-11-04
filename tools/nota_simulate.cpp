@@ -16,11 +16,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "image_io.hpp"
 #include "nota/page_analysis.hpp"
+#include "nota/position_estimator.hpp"
 #include "nota/score_geometry.hpp"
 #include "nota/scroll_control.hpp"
 
@@ -46,6 +48,13 @@ void PrintUsage() {
                "  --resync-beats <f>   점프 크기(박). 기본 8\n"
                "  --stop-at <f>        이 박에서 연주를 멈춘다 (2초간)\n"
                "\n"
+               "위치 추정 옵션 (ALGORITHM.md 6절):\n"
+               "  --estimate           위치 추정기를 끼워 넣는다. 온셋은 정답\n"
+               "                       위치의 잉크에서 합성한다 (완벽한 검출기 가정)\n"
+               "  --tempo-error <f>    템포 추정 오차 (예: 0.03 = 3%% 낮게 추정)\n"
+               "  --ink-per-onset <f>  합성에 쓸 실제 잉크/온셋 (기본 120)\n"
+               "  --no-resync          추정기를 켜되 재동기화를 끈다 (적분만)\n"
+               "\n"
                "출력:\n"
                "  --trace <out.csv>    프레임별 궤적 덤프\n"
                "  --quiet              요약 출력 생략\n");
@@ -53,7 +62,9 @@ void PrintUsage() {
 
 struct Frame {
   double t = 0.0;
-  double beat = 0.0;
+  double beat = 0.0;       // 제어기에 들어간 박 (추정기를 켜면 추정값)
+  double true_beat = 0.0;  // 정답 박
+  double confidence = 0.0;
   double target = 0.0;
   double offset = 0.0;
   double velocity = 0.0;
@@ -90,6 +101,10 @@ int main(int argc, char** argv) {
   double resync_at = -1.0;
   double resync_beats = 8.0;
   double stop_at = -1.0;
+  bool estimate = false;
+  bool no_resync = false;
+  double tempo_error = 0.0;
+  double true_ink_per_onset = 120.0;
 
   for (int i = 1; i < argc; ++i) {
     const char* arg = argv[i];
@@ -124,6 +139,14 @@ int main(int argc, char** argv) {
       resync_beats = std::atof(next(arg));
     } else if (std::strcmp(arg, "--stop-at") == 0) {
       stop_at = std::atof(next(arg));
+    } else if (std::strcmp(arg, "--estimate") == 0) {
+      estimate = true;
+    } else if (std::strcmp(arg, "--tempo-error") == 0) {
+      tempo_error = std::atof(next(arg));
+    } else if (std::strcmp(arg, "--ink-per-onset") == 0) {
+      true_ink_per_onset = std::atof(next(arg));
+    } else if (std::strcmp(arg, "--no-resync") == 0) {
+      no_resync = true;
     } else if (std::strcmp(arg, "--trace") == 0) {
       trace_path = next(arg);
     } else if (std::strcmp(arg, "--quiet") == 0) {
@@ -173,21 +196,30 @@ int main(int argc, char** argv) {
   ctl.Reset(0.0);
 
   // 연주를 모사한다. 박은 템포로 적분하고, 요청에 따라 점프와 정지를 끼운다.
+  nota::PositionEstimatorParams est_params;
+  std::unique_ptr<nota::PositionEstimator> est;
+  const double estimated_tempo = tempo * (1.0 - tempo_error);
+  if (estimate) {
+    est = std::make_unique<nota::PositionEstimator>(geom, est_params);
+    est->Reset(0.0, estimated_tempo);
+  }
+
   std::vector<Frame> frames;
   const double base_dt = 1.0 / fps;
   double t = 0.0;
   double beat = 0.0;
+  double true_beat = 0.0;
   bool resynced = false;
   double stop_remaining = -1.0;
   int frame_index = 0;
 
-  while (beat < geom.total_beats() && t < 1800.0) {
+  while (true_beat < geom.total_beats() && t < 1800.0) {
     double dt = base_dt;
     // 프레임 드롭: 10프레임마다 한 번 4배로 길어진다.
     if (drop_frames && (frame_index % 10) == 9) dt = base_dt * 4.0;
 
     bool playing = true;
-    if (stop_at >= 0.0 && stop_remaining < 0.0 && beat >= stop_at) {
+    if (stop_at >= 0.0 && stop_remaining < 0.0 && true_beat >= stop_at) {
       stop_remaining = 2.0;  // 2초간 정지
     }
     if (stop_remaining >= 0.0) {
@@ -196,21 +228,43 @@ int main(int argc, char** argv) {
       if (stop_remaining < 0.0) stop_remaining = -1.0;
     }
 
-    if (playing) beat += (tempo / 60.0) * dt;
+    if (playing) true_beat += (tempo / 60.0) * dt;
 
     // 재동기화 모사: 위치 추정이 한 번에 뛴다 (ALGORITHM.md 6.2).
-    if (!resynced && resync_at >= 0.0 && beat >= resync_at) {
-      beat += resync_beats;
+    if (!resynced && resync_at >= 0.0 && true_beat >= resync_at) {
+      true_beat += resync_beats;
       resynced = true;
     }
 
-    const nota::ScrollState s = ctl.Update(dt, beat, playing ? tempo : 0.0);
+    double confidence = 0.0;
+    if (estimate) {
+      // 완벽한 온셋 검출기를 가정하고 정답 위치의 잉크에서 온셋 수를 합성한다.
+      // 검출기의 품질은 녹음이 와야 측정된다 (V3/V4).
+      const double window_beats =
+          (estimated_tempo / 60.0) * est_params.resync_window_seconds;
+      int onsets = -1;
+      if (!no_resync && playing) {
+        const double ink =
+            geom.InkBetween(true_beat - window_beats, true_beat);
+        onsets = static_cast<int>(std::lround(ink / true_ink_per_onset));
+      }
+      const nota::PositionState ps =
+          est->Update(dt, estimated_tempo, playing, onsets);
+      beat = ps.beat;
+      confidence = ps.confidence;
+    } else {
+      beat = true_beat;
+    }
+
+    const nota::ScrollState s = ctl.Update(dt, beat, playing ? estimated_tempo : 0.0);
     t += dt;
     ++frame_index;
 
     Frame f;
     f.t = t;
     f.beat = beat;
+    f.true_beat = true_beat;
+    f.confidence = confidence;
     f.target = geom.CanvasY(beat) - ctl.read_line();
     f.offset = s.offset;
     f.velocity = s.velocity;
@@ -224,14 +278,17 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "error: cannot write %s\n", trace_path.c_str());
       return 1;
     }
-    std::fprintf(out, "t,beat,target_y,offset,velocity,accel,system\n");
+    std::fprintf(out,
+                 "t,beat,true_beat,beat_error,confidence,target_y,offset,"
+                 "velocity,accel,system\n");
     for (std::size_t i = 0; i < frames.size(); ++i) {
       const double prev_v = i > 0 ? frames[i - 1].velocity : 0.0;
       const double h = i > 0 ? frames[i].t - frames[i - 1].t : base_dt;
-      std::fprintf(out, "%.5f,%.5f,%.3f,%.3f,%.3f,%.3f,%d\n", frames[i].t,
-                   frames[i].beat, frames[i].target, frames[i].offset,
-                   frames[i].velocity, (frames[i].velocity - prev_v) / h,
-                   frames[i].system);
+      std::fprintf(out, "%.5f,%.5f,%.5f,%.5f,%.3f,%.3f,%.3f,%.3f,%.3f,%d\n",
+                   frames[i].t, frames[i].beat, frames[i].true_beat,
+                   frames[i].beat - frames[i].true_beat, frames[i].confidence,
+                   frames[i].target, frames[i].offset, frames[i].velocity,
+                   (frames[i].velocity - prev_v) / h, frames[i].system);
     }
     std::fclose(out);
     std::fprintf(stderr, "trace written: %s\n", trace_path.c_str());
@@ -276,7 +333,7 @@ int main(int argc, char** argv) {
     const double settled = ctl.read_line() * 0.02;
     double jump_t = -1.0;
     for (std::size_t i = 1; i < frames.size(); ++i) {
-      if (frames[i].beat - frames[i - 1].beat > (tempo / 60.0) * 0.5) {
+      if (frames[i].true_beat - frames[i - 1].true_beat > (tempo / 60.0) * 0.5) {
         jump_t = frames[i].t;
         break;
       }
@@ -307,6 +364,38 @@ int main(int argc, char** argv) {
   std::printf("  가속도 95%% %.1f px/s^2\n", Percentile(accels, 0.95));
   std::printf("  역행 거리   %.3f px\n", reversal_px);
   std::printf("  (역행 = 스크롤이 되돌아온 총 거리. 0이어야 한다, ALGORITHM.md 7.2)\n");
+  if (estimate) {
+    // 위치 추정 오차. V6(3분 연주 후 1시스템 이내)의 지표다.
+    std::vector<double> beat_errors;
+    double worst_beat_error = 0.0;
+    double conf_sum = 0.0;
+    int conf_count = 0;
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+      const double e = std::fabs(frames[i].beat - frames[i].true_beat);
+      beat_errors.push_back(e);
+      worst_beat_error = std::fmax(worst_beat_error, e);
+      if (frames[i].confidence > 0.0) {
+        conf_sum += frames[i].confidence;
+        ++conf_count;
+      }
+    }
+    const double system_beats =
+        geom.systems()[0].beat_end - geom.systems()[0].beat_start;
+    std::printf("\n위치 추정 (템포 오차 %.1f%%, 시스템당 %.1f박)\n",
+                tempo_error * 100.0, system_beats);
+    std::printf("  박 오차 중앙값 %.2f,  95%% %.2f,  최대 %.2f박\n",
+                Percentile(beat_errors, 0.5), Percentile(beat_errors, 0.95),
+                worst_beat_error);
+    std::printf("  최대 오차 = %.2f 시스템  (V6 기준 1.0 이내)\n",
+                system_beats > 0.0 ? worst_beat_error / system_beats : 0.0);
+    if (!no_resync) {
+      std::printf("  신뢰도 > 0인 프레임 %d개, 평균 신뢰도 %.3f\n", conf_count,
+                  conf_count > 0 ? conf_sum / conf_count : 0.0);
+      std::printf("  잉크/온셋 환산: 참값 %.0f → 추정 %.0f\n", true_ink_per_onset,
+                  est->ink_per_onset());
+    }
+  }
+
   if (resync_settle >= 0.0) {
     std::printf("\n재동기화 흡수\n");
     std::printf("  점프 %.1f박 → 최대 오차 %.1f px, 흡수 시간 %.2f초\n",
