@@ -9,6 +9,7 @@ add_library(nota_core
   src/binarize.cpp
   src/staff_detect.cpp
   src/page_analysis.cpp
+  src/skew.cpp
 )
 
 target_include_directories(nota_core PUBLIC include)

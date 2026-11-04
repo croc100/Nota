@@ -137,3 +137,22 @@ NOTA_TEST(BlankPageYieldsNoSystems) {
   CHECK_EQ(page.systems.size(), static_cast<std::size_t>(0));
   CHECK_EQ(page.measures.size(), static_cast<std::size_t>(0));
 }
+
+NOTA_TEST(QualityIsConsistentOnCleanScore) {
+  nota_test::SynthParams params;
+  params.systems = 4;
+  const nota_test::SynthScore score = nota_test::GenerateScore(params);
+  const nota::PageAnalysis page = Analyze(score.image);
+
+  CHECK(page.quality.is_consistent());
+  CHECK_EQ(page.quality.dominant_staff_count, 2);
+  CHECK_EQ(page.quality.total_systems, score.system_count);
+  CHECK_NEAR(page.quality.consistency(), 1.0, 1e-9);
+}
+
+NOTA_TEST(QualityIsZeroOnBlankPage) {
+  nota::GrayImage blank(800, 1000, 255);
+  const nota::PageAnalysis page = Analyze(blank);
+  CHECK(!page.quality.is_consistent());
+  CHECK_NEAR(page.quality.consistency(), 0.0, 1e-9);
+}

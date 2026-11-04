@@ -1,5 +1,7 @@
 #include "nota/page_analysis.hpp"
 
+#include "nota/skew.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -7,42 +9,104 @@
 namespace nota {
 namespace {
 
-double Median(std::vector<double> v) {
-  if (v.empty()) return 0.0;
-  const std::size_t mid = v.size() / 2;
-  std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(mid), v.end());
-  const double hi = v[mid];
-  if (v.size() % 2 == 1) return hi;
-  std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(mid - 1),
-                   v.begin() + static_cast<std::ptrdiff_t>(mid));
-  return 0.5 * (hi + v[mid - 1]);
-}
 
 // 오선이 실제로 그려진 수평 범위를 찾는다. 페이지 폭이 아니라 이 범위가
-// 마디 계산의 기준이다 — 여백과 잘라내기 정도가 악보마다 다르기 때문이다.
+// 마디 계산과 연결선 탐색의 기준이다 — 여백과 잘라내기 정도가 악보마다 다르다.
+//
+// 선 하나씩 따로 보면 안 된다. 두 가지 열화가 서로 반대 방향으로 망가뜨린다.
+//
+//   잡음    고립된 점 하나가 "첫 잉크 픽셀" 기준을 통째로 끌고 간다.
+//           실측(Chopin, sigma 20): 정답 117인 x_start가 43~122로 요동쳐
+//           연결선 탐색 창이 빗나가고 시스템이 6개에서 11개로 쪼개졌다.
+//   흐림+잡음  획이 큰 틈으로 조각나, "가장 긴 연속 구간" 기준은 파편 하나만
+//           집는다. 실측(heavy 프리셋): 시스템이 7개에서 12개로 쪼개졌다.
+//
+// 5선을 함께 본다. 어떤 x가 오선 안쪽이려면 그 x에서 5개 선 중 최소 4개에
+// 잉크가 있어야 한다. 무작위 잡음이 특정 5개 행에 동시에 맞을 확률은 낮고,
+// 획이 조금 끊겨도 나머지 선들이 받쳐준다. 양쪽 열화에 동시에 강하다.
 void StaffHorizontalExtent(const BinaryImage& image, const Staff& staff,
                            double* x_start, double* x_end) {
-  std::vector<double> firsts;
-  std::vector<double> lasts;
+  *x_start = 0.0;
+  *x_end = 0.0;
+  if (image.width <= 0) return;
+
+  std::vector<int> rows;
+  rows.reserve(5);
   for (int k = 0; k < 5; ++k) {
     const int y = static_cast<int>(std::lround(staff.line_y[k]));
-    if (y < 0 || y >= image.height) continue;
-    int first = -1;
-    int last = -1;
-    for (int x = 0; x < image.width; ++x) {
-      if (image.at(x, y) != 0) {
-        if (first < 0) first = x;
-        last = x;
+    if (y >= 0 && y < image.height) rows.push_back(y);
+  }
+  if (rows.size() < 4) return;
+
+  // 보정 후에도 남는 미세한 기울기와 보간 때문에 선이 한 행 어긋날 수 있다.
+  const auto inked = [&](int x, int y) {
+    for (int dy = -1; dy <= 1; ++dy) {
+      const int yy = y + dy;
+      if (yy >= 0 && yy < image.height && image.at(x, yy) != 0) return true;
+    }
+    return false;
+  };
+
+  // x마다 몇 개의 선에 잉크가 있는지 센다.
+  std::vector<int> hits(static_cast<std::size_t>(image.width), 0);
+  for (int x = 0; x < image.width; ++x) {
+    int n = 0;
+    for (const int y : rows) {
+      if (inked(x, y)) ++n;
+    }
+    hits[static_cast<std::size_t>(x)] = n;
+  }
+
+  // 픽셀 단위로 엄격히 보면 안 된다. 흐림과 잡음이 겹치면 획이 조각나
+  // 긴 구간에서 조건이 끊긴다(실측 heavy 프리셋: x_start가 117 대신
+  // 273~927로 튀어 시스템이 6개에서 9개로 쪼개졌다).
+  //
+  // 우리가 찾는 것은 픽셀이 아니라 "오선이 있는 구간"이므로, 오선 간격
+  // 폭으로 평활화한 뒤 임계를 잡는다. 조각난 획은 이웃이 메워주고, 고립된
+  // 잡음은 구간 평균을 넘기지 못한다.
+  const int w = std::max(2, static_cast<int>(staff.staff_space));
+  std::vector<int> prefix(hits.size() + 1, 0);
+  for (std::size_t i = 0; i < hits.size(); ++i) {
+    prefix[i + 1] = prefix[i] + hits[i];
+  }
+  const double needed = 0.5 * static_cast<double>(rows.size());
+
+  const int max_gap = std::max(2, static_cast<int>(1.5 * staff.staff_space));
+  int best_start = -1;
+  int best_end = -1;
+  int cur_start = -1;
+  int cur_end = -1;
+  int gap = 0;
+
+  for (int x = 0; x < image.width; ++x) {
+    const int lo = std::max(0, x - w);
+    const int hi = std::min(image.width, x + w + 1);
+    const double mean = static_cast<double>(prefix[static_cast<std::size_t>(hi)] -
+                                            prefix[static_cast<std::size_t>(lo)]) /
+                        static_cast<double>(hi - lo);
+    if (mean >= needed) {
+      if (cur_start < 0) cur_start = x;
+      cur_end = x;
+      gap = 0;
+    } else if (cur_start >= 0) {
+      if (++gap > max_gap) {
+        if (cur_end - cur_start > best_end - best_start) {
+          best_start = cur_start;
+          best_end = cur_end;
+        }
+        cur_start = -1;
+        gap = 0;
       }
     }
-    if (first >= 0) {
-      firsts.push_back(static_cast<double>(first));
-      lasts.push_back(static_cast<double>(last));
-    }
   }
-  // 중위수를 쓴다. 한 선이 스캔 얼룩으로 길게 번져도 흔들리지 않는다.
-  *x_start = Median(std::move(firsts));
-  *x_end = Median(std::move(lasts));
+  if (cur_start >= 0 && cur_end - cur_start > best_end - best_start) {
+    best_start = cur_start;
+    best_end = cur_end;
+  }
+  if (best_start >= 0) {
+    *x_start = static_cast<double>(best_start);
+    *x_end = static_cast<double>(best_end);
+  }
 }
 
 // 오선 사이 간격을 "시스템 내부"와 "시스템 사이"로 가른다.
@@ -342,6 +406,56 @@ PageAnalysis AnalyzePage(const BinaryImage& image,
       out.measures.push_back(m);
     }
   }
+
+  // 품질 평가: 시스템당 오선 수의 최빈값과 그것을 따르는 비율.
+  if (!out.systems.empty()) {
+    std::vector<int> counts;
+    counts.reserve(out.systems.size());
+    for (const System& sys : out.systems) counts.push_back(sys.staff_count);
+
+    int best_value = counts[0];
+    int best_freq = 0;
+    for (const int v : counts) {
+      const int freq =
+          static_cast<int>(std::count(counts.begin(), counts.end(), v));
+      if (freq > best_freq) {
+        best_freq = freq;
+        best_value = v;
+      }
+    }
+    out.quality.dominant_staff_count = best_value;
+    out.quality.consistent_systems = best_freq;
+    out.quality.total_systems = static_cast<int>(out.systems.size());
+  }
+  return out;
+}
+
+}  // namespace nota
+
+namespace nota {
+
+PageAnalysis AnalyzePageGray(const GrayView& image,
+                             const PageAnalysisParams& params) {
+  PageAnalysis empty;
+  if (!image.valid()) return empty;
+
+  BinaryImage binary = BinarizeSauvola(image, params.sauvola);
+  double angle = 0.0;
+
+  if (params.deskew) {
+    angle = EstimateSkewDegrees(binary, params.skew);
+    // 아주 작은 각도는 보정 비용만 들고 이득이 없다. 회전·재이진화에서
+    // 생기는 미세한 획 변형이 오히려 손해다.
+    if (std::fabs(angle) >= 0.03) {
+      const GrayImage rotated = RotateGray(image, angle);
+      binary = BinarizeSauvola(rotated.view(), params.sauvola);
+    } else {
+      angle = 0.0;
+    }
+  }
+
+  PageAnalysis out = AnalyzePage(binary, params);
+  out.deskew_angle_deg = angle;
   return out;
 }
 

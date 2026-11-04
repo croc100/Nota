@@ -14,6 +14,7 @@
 
 #include "nota/binarize.hpp"
 #include "nota/bitmap.hpp"
+#include "nota/skew.hpp"
 #include "nota/staff_detect.hpp"
 
 namespace nota {
@@ -70,9 +71,14 @@ struct BarlineDetectParams {
 };
 
 struct PageAnalysisParams {
+  SauvolaParams sauvola;
+  SkewParams skew;
   StaffDetectParams staff;
   SystemDetectParams system;
   BarlineDetectParams barline;
+  // 기울기 보정. 끌 이유는 거의 없다 — 0.5도만 기울어도 오선 검출이 완전히
+  // 무너진다(skew.hpp). 이미 보정된 입력에서만 끈다.
+  bool deskew = true;
 };
 
 // 대보표 하나. 피아노에서는 오선 2개지만, 한 개짜리도 허용한다(표지, 단선 악보).
@@ -105,14 +111,55 @@ struct Measure {
   int ink_density = 0;
 };
 
+// 검출 결과를 스스로 얼마나 믿을 수 있는지에 대한 평가.
+//
+// 조용히 틀린 답을 내놓는 것이 깨끗하게 실패하는 것보다 나쁘다. 심한 흐림에서
+// 검출기는 오선을 전부 못 찾거나(명백한 실패), 일부만 찾아 시스템 구조를
+// 잘못 만든다(조용한 실패). 후자를 호출자가 알아챌 수 있어야 등급 C(사용자
+// 캘리브레이션)로 넘어갈 수 있다.
+//
+// 피아노 악보에서 모든 시스템은 같은 수의 오선을 가진다(보통 2). 이 규칙이
+// 깨지면 검출이 틀린 것이다. 음악적 사전지식으로 얻는 값싼 검사다.
+struct PageQuality {
+  int dominant_staff_count = 0;   // 가장 흔한 시스템당 오선 수
+  int consistent_systems = 0;     // 그 수를 따르는 시스템 개수
+  int total_systems = 0;
+
+  // 모든 시스템이 같은 구조를 가지는가. 거짓이면 매핑을 신뢰하면 안 된다.
+  bool is_consistent() const {
+    return total_systems > 0 && consistent_systems == total_systems;
+  }
+  double consistency() const {
+    return total_systems > 0
+               ? static_cast<double>(consistent_systems) /
+                     static_cast<double>(total_systems)
+               : 0.0;
+  }
+};
+
 struct PageAnalysis {
+  PageQuality quality;
+  // 적용한 보정 각도(도). 좌표는 모두 보정 후 기준이므로, 원본 이미지 위에
+  // 그리려면 호출자가 이 각도로 역변환하거나 화면용 이미지도 같이 회전해야
+  // 한다.
+  double deskew_angle_deg = 0.0;
   StaffDetectResult staves;
   std::vector<System> systems;
   std::vector<Barline> barlines;
   std::vector<Measure> measures;
 };
 
+// 이진 이미지에서 바로 분석한다. 기울기 보정을 하지 않는다.
 PageAnalysis AnalyzePage(const BinaryImage& image,
                          const PageAnalysisParams& params = {});
+
+// 회색조에서 시작하는 전체 경로. 권장 진입점이다.
+//
+// 이진화 → 기울기 추정 → 회색조 회전 → 재이진화 → 분석.
+// 이진 이미지를 회전시키지 않고 회색조로 되돌아가는 이유는, 이진 영상의
+// 최근접 회전이 2~3 px 두께의 오선을 끊어 놓기 때문이다. 회색조는 쌍선형
+// 보간이 가능하고 이후 Sauvola가 다시 임계를 잡으므로 획이 보존된다.
+PageAnalysis AnalyzePageGray(const GrayView& image,
+                             const PageAnalysisParams& params = {});
 
 }  // namespace nota

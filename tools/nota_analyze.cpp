@@ -15,6 +15,7 @@
 #include "image_io.hpp"
 #include "nota/binarize.hpp"
 #include "nota/page_analysis.hpp"
+#include "nota/skew.hpp"
 #include "nota/staff_detect.hpp"
 
 namespace {
@@ -28,6 +29,7 @@ void PrintUsage() {
                "  --projection <out.csv>   행별 잉크 투영 덤프 (y,ink)\n"
                "  --window <n>             Sauvola 윈도우 (기본 41)\n"
                "  --peak-fraction <f>      오선 임계 비율 (기본 0.5)\n"
+               "  --no-deskew              기울기 보정 끄기\n"
                "  --quiet                  JSON 출력 생략\n");
 }
 
@@ -118,6 +120,12 @@ void PrintJson(const nota::GrayImage& gray, const nota::PageAnalysis& page) {
   std::printf("{\n");
   std::printf("  \"image\": { \"width\": %d, \"height\": %d },\n", gray.width,
               gray.height);
+  std::printf("  \"deskew_angle_deg\": %.3f,\n", page.deskew_angle_deg);
+  std::printf(
+      "  \"quality\": { \"consistent\": %s, \"dominant_staff_count\": %d, "
+      "\"consistency\": %.3f },\n",
+      page.quality.is_consistent() ? "true" : "false",
+      page.quality.dominant_staff_count, page.quality.consistency());
   std::printf("  \"row_threshold\": %d,\n", result.row_threshold);
   std::printf("  \"line_count\": %zu,\n", result.lines.size());
   std::printf("  \"staff_count\": %zu,\n", result.staves.size());
@@ -165,6 +173,7 @@ int main(int argc, char** argv) {
   nota::SauvolaParams sauvola;
   nota::StaffDetectParams detect;
   bool quiet = false;
+  bool no_deskew = false;
 
   for (int i = 2; i < argc; ++i) {
     const char* arg = argv[i];
@@ -183,6 +192,8 @@ int main(int argc, char** argv) {
       sauvola.window = std::atoi(next(arg));
     } else if (std::strcmp(arg, "--peak-fraction") == 0) {
       detect.row_peak_fraction = std::atof(next(arg));
+    } else if (std::strcmp(arg, "--no-deskew") == 0) {
+      no_deskew = true;
     } else if (std::strcmp(arg, "--quiet") == 0) {
       quiet = true;
     } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
@@ -201,14 +212,21 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const nota::BinaryImage bin = nota::BinarizeSauvola(gray.view(), sauvola);
   nota::PageAnalysisParams analysis_params;
+  analysis_params.sauvola = sauvola;
   analysis_params.staff = detect;
-  const nota::PageAnalysis page = nota::AnalyzePage(bin, analysis_params);
+  analysis_params.deskew = !no_deskew;
+  const nota::PageAnalysis page = nota::AnalyzePageGray(gray.view(), analysis_params);
   const nota::StaffDetectResult& result = page.staves;
 
   if (!overlay_path.empty()) {
-    const nota_tools::RgbImage overlay = BuildOverlay(gray, page);
+    // 좌표는 기울기 보정 후 기준이므로 배경 이미지도 같은 각도로 돌려야
+    // 겹쳐 그린 결과가 맞는다.
+    const nota::GrayImage shown =
+        page.deskew_angle_deg != 0.0
+            ? nota::RotateGray(gray.view(), page.deskew_angle_deg)
+            : gray;
+    const nota_tools::RgbImage overlay = BuildOverlay(shown, page);
     if (!nota_tools::WritePpm(overlay_path, overlay, &error)) {
       std::fprintf(stderr, "error: %s\n", error.c_str());
       return 1;
