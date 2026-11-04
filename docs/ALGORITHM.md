@@ -1,7 +1,9 @@
 # Nota 알고리즘 상세
 
-이 문서는 `docs/DESIGN.md`의 `AudioFollower`, `ScoreGeometry`,
+이 문서는 `NotaCore`의 `AudioFollower`, `ScoreGeometry`,
 `PositionEstimator`, `ScrollController` 네 모듈의 구체적 동작을 기술한다.
+모두 플랫폼 중립 C++로 구현되며 iOS와 Android가 동일한 코드를 사용한다
+(`docs/decisions/0001-core-language.md`).
 
 아래 파라미터는 **설계 초기값**이며, 0단계 검증(실제 피아노 녹음과 악보 표본)에서
 측정 후 조정한다. 근거 없이 확정된 값이 아니다.
@@ -12,18 +14,32 @@
 
 ### 1.1 캡처
 
-`AVAudioEngine`의 입력 노드에 탭을 설치한다.
+캡처는 플랫폼 코드가 담당하고, 코어는 PCM 프레임만 받는다.
 
 - 샘플레이트 44100 Hz, 모노
-- 탭 버퍼 512 프레임
-- `AVAudioSession` 카테고리 `.record`, 모드 `.measurement`
-  (`.measurement`는 자동 게인 제어와 신호 처리를 끈다. AGC가 켜져 있으면 온셋
-  검출이 왜곡되므로 중요하다.)
+- 콜백 버퍼 512 프레임
+
+**공통 요구사항 — 전처리를 반드시 끌 것.** 자동 게인 제어(AGC)와 노이즈 억제는
+온셋 검출을 직접적으로 훼손한다. AGC는 셈여림을 평탄화해 에너지 상승을 지워버리고,
+노이즈 억제는 타현음의 트랜지언트를 깎는다.
+
+| 플랫폼 | API | 전처리 비활성화 |
+|---|---|---|
+| iOS | `AVAudioEngine` 입력 탭 | `AVAudioSession` 카테고리 `.record`, 모드 `.measurement` |
+| Android | Oboe / AAudio | 오디오 소스 `UNPROCESSED` 요청 |
+
+Android는 이것이 보장되지 않는다. `UNPROCESSED`는
+`PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED`가 `true`인 기기에서만 동작하고,
+미지원 기기에서는 `VOICE_RECOGNITION`으로 폴백한다(`VOICE_COMMUNICATION`은
+에코 제거와 AGC가 강하게 걸리므로 절대 쓰지 않는다). 그래도 전처리를 완전히
+끌 수 없는 기기가 존재하므로, 기기별 실측과 적응 임계 조정이 필요하다.
+`DESIGN.md` 10절의 Android 리스크 항목.
 
 ### 1.2 링 버퍼
 
-탭 콜백은 실시간 스레드에서 호출된다. 여기서 할당·락·Obj-C 메시지 전송·ARC
-리테인이 발생하면 데드라인을 놓치고 오디오가 끊긴다. 따라서 이 부분만 C로 둔다.
+오디오 콜백은 실시간 스레드에서 호출된다. 여기서 할당·락·가비지 컬렉션·ARC
+리테인이 발생하면 데드라인을 놓치고 오디오가 끊긴다. 따라서 링 버퍼는 코어의
+C++ 코드이며, 양 플랫폼의 콜백이 직접 여기에 쓴다.
 
 단일 생산자 / 단일 소비자 구조이므로 락이 필요 없다.
 
@@ -201,16 +217,18 @@ Q(x) = Σ_{y ∈ 시스템 범위} binary(x, y)
 
 ### 5.5 출력
 
-```swift
+```cpp
+namespace nota {
 struct Measure {
-    let index: Int           // 곡 전체에서의 마디 번호
-    let pageIndex: Int
-    let canvasYTop: CGFloat  // 이어붙인 캔버스 좌표계
-    let canvasYBottom: CGFloat
-    let xStart: CGFloat
-    let xEnd: CGFloat
-    let inkDensity: Float    // 오선 제거 후 잉크 픽셀 수 — 음표 수의 근사
-}
+    int   index;          // 곡 전체에서의 마디 번호
+    int   page_index;
+    float canvas_y_top;   // 이어붙인 캔버스 좌표계
+    float canvas_y_bottom;
+    float x_start;
+    float x_end;
+    float ink_density;    // 오선 제거 후 잉크 픽셀 수 — 음표 수의 근사
+};
+}  // namespace nota
 ```
 
 `inkDensity`는 6.2절의 재동기화에 쓰인다. 음표를 인식하지 않고도 "이 마디에 음이
@@ -334,7 +352,10 @@ v_ff = (T / 60) · (dy / dbeat)
 
 ## 8. 0단계 검증 항목
 
-구현 전에 Python으로 확인한다. 각 항목은 통과/실패가 명확해야 한다.
+`core/`와 `tools/`를 Linux에서 빌드해 확인한다. Xcode도 Android Studio도 필요
+없다(`DESIGN.md` 9.3절). 검증에 쓰는 코드가 곧 배포되는 코드다.
+
+각 항목은 통과/실패가 명확해야 한다.
 
 | 번호 | 항목 | 통과 기준 |
 |---|---|---|
@@ -347,3 +368,20 @@ v_ff = (T / 60) · (dy / dbeat)
 | V7 | 정지·재개 | 연주 중단 500 ms 이내 스크롤 정지 |
 
 V6이 가장 중요하다. 이것이 실패하면 설계를 재검토해야 한다.
+
+### 8.1 Android 기기 검증 (3단계)
+
+V3~V7은 iOS 마이크 기준으로 먼저 확정한다. Android는 하드웨어 편차가 크므로
+이식 단계에서 별도 검증이 필요하다.
+
+| 번호 | 항목 | 통과 기준 |
+|---|---|---|
+| A1 | `UNPROCESSED` 소스 지원 조사 | 대상 기기군에서 지원 비율 파악 |
+| A2 | 폴백 경로(`VOICE_RECOGNITION`) 온셋 검출 | V3 대비 F-measure 하락 0.10 이내 |
+| A3 | 입력 레이턴시 | Oboe 왕복 측정, 스크롤 반응에 영향 없는 수준 |
+| A4 | 저가 기기 CPU 부하 | 분석 파이프라인이 실시간 대비 0.5배 이내 |
+
+A2가 실패하는 기기군은 최소 사양에서 제외하거나, 해당 기기에서 적응 임계
+파라미터를 별도로 조정한다.
+
+이 항목들은 실기기가 필요하므로 0단계에서 수행하지 않는다.

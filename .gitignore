@@ -53,6 +53,48 @@ Carthage/Build/
 secrets.plist
 GoogleService-Info.plist
 
+# ---- C++ / CMake (core/, tools/) ----
+cmake-build-*/
+build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+compile_commands.json
+*.o
+*.a
+*.so
+*.dylib
+Testing/
+
+# ---- Android / Gradle ----
+.gradle/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.aar
+*.keystore
+*.jks
+android/app/release/
+
+# ---- Android Studio / IntelliJ ----
+.idea/
+*.iml
+
+# ---- NDK / 네이티브 산출물 ----
+obj/
+libs/armeabi*/
+libs/arm64*/
+libs/x86*/
+
+# ---- XCFramework 산출물 ----
+*.xcframework/
+Frameworks/NotaCore.xcframework/
+
 # ---- Python (prototype/) ----
 __pycache__/
 *.py[cod]
