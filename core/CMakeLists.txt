@@ -11,6 +11,7 @@ add_library(nota_core
   src/page_analysis.cpp
   src/skew.cpp
   src/score_geometry.cpp
+  src/scroll_control.cpp
 )
 
 target_include_directories(nota_core PUBLIC include)

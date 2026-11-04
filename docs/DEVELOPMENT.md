@@ -103,6 +103,20 @@ JSON의 `advance_ratio`는 시스템마다의 y 전진을 중앙값으로 나눈
 주면 페이지 여백을 자르지 않아 이 값이 페이지 경계에서 4.49까지 올라가는 것을
 볼 수 있다(`ALGORITHM.md` 8.3).
 
+### 스크롤 제어 측정
+
+오디오 없이 연주를 모사한다. 등속·재동기화 점프·정지·프레임 드롭을 끼워 넣고
+추적 오차와 부드러움(최대 가속도, 역행 거리)을 본다.
+
+```
+./build/tools/nota-simulate page-1.pgm page-2.pgm --beats 4 --total-beats 136 \
+    --tempo 90 --trace trace.csv
+```
+
+기대값은 `ALGORITHM.md` 8.4절. 등속에서 추적 오차 중앙값 0.32 px, 역행 0 px가
+나와야 한다. **역행이 0이 아니면 그것부터 봐야 한다** — 스크롤이 되돌아오면
+연주자는 자기가 보던 자리를 잃는다.
+
 ### 열화 내성
 
 ```
@@ -139,26 +153,40 @@ pdftoppm -gray -r 200 -f 1 -l 1 score.pdf page   # page-1.pgm
 | `nota::DetectStaves` | 오선 검출 |
 | `nota::AnalyzePageGray` | 전처리~마디 상자까지 전체 경로 + 자체 품질 평가 |
 | `nota::ScoreGeometry` | 시간↔픽셀 매핑. 시스템 단위 보간, 양방향 변환 |
+| `nota::ScrollController` | 임계 감쇠 스프링 + 속도 피드포워드 + 수동 개입 |
 | `nota-analyze` | 페이지 분석 CLI |
 | `nota-geometry` | 여러 페이지 → 매핑 CLI (`--curve`로 박→y 곡선 덤프) |
+| `nota-simulate` | 매핑 + 제어기 묶은 연주 모사 CLI |
 
 측정 결과는 `ALGORITHM.md` 8.0(V1/V2), 8.1(열화 내성), 8.2(품질 평가),
-8.3(매핑).
+8.3(매핑), 8.4(스크롤 제어).
 
-### 다음 — 스크롤 제어기
+### 다음 — 위치 추정기
 
-`ALGORITHM.md` 7절. 입력이 숫자뿐이므로 오디오도 이미지도 없이 단위 테스트가
-된다. 매핑이 끝났으니 `PixelsPerBeat`(7.3절 피드포워드)와 `BeatAt`(7.5절 수동
-개입)을 바로 쓸 수 있다.
+`ALGORITHM.md` 6절. 오디오 없이 만들 수 있는 부분이 절반 있다.
 
-구현할 것:
+1. `core/include/nota/position_estimator.hpp` — 상태(박 `p`, 템포 `T`)와 적분,
+   재동기화 혼합(6.2의 상보 필터, β=0.15), 급변 억제(6.3의 연속 3회 규칙).
+   입력은 "온셋이 몇 개 관측됐는가"라는 숫자뿐이므로 온셋 검출기 없이 테스트된다.
+2. 재동기화 상대는 `GeometryMeasure::ink_density`다 — 이미 매핑에 들어 있다.
+3. `nota-simulate`에 위치 추정기를 끼워 넣어, 드리프트를 주고 재동기화가
+   따라잡는지 측정한다 (V6의 나머지 절반).
 
-1. `core/include/nota/scroll_control.hpp` / `src/scroll_control.cpp` —
-   임계 감쇠 스프링(7.2), 속도 피드포워드(7.3), 속도 제한(7.4), 수동 개입(7.5)
-2. 테스트 — 정상상태 오차가 0에 수렴하는지, 오버슈트가 없는지, 템포 점프에서
-   속도 제한이 걸리는지, 손 스크롤 후 위치가 인수되는지
-3. 매핑과 묶은 시뮬레이션 — 정답 박 곡선을 주고 스크롤 y 궤적을 CSV로 덤프.
-   `prototype/evaluate_geometry.py`가 매핑을 채점한 것과 같은 방식이다.
+온셋 검출(2절)·템포 추정(3절)·정지 감지(4절)는 녹음이 와야 한다.
+
+### 제어기 상수는 기기에서 정해야 한다
+
+`ω = 2π·0.8 rad/s`는 설계값 그대로다. 측정으로는 교환 곡선까지만 나왔다 —
+흡수 시간은 1/ω, 최대 가속도는 ω²에 비례하고, 정상 추적 오차는 ω와 무관하다
+(`ALGORITHM.md` 8.4). 4875 px/s²의 잡아챔이 연주를 방해하는지는 사람이 기기에서
+봐야 안다. 추측으로 바꾸지 말 것.
+
+판단에 쓸 명령:
+
+```
+./build/tools/nota-simulate page-1.pgm page-2.pgm --beats 4 --total-beats 136 \
+    --tempo 90 --resync-at 40 --resync-beats 8 --omega 3.14 --trace t.csv
+```
 
 ### 알려진 과제 — 짧은 시스템을 놓친다
 
