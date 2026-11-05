@@ -17,6 +17,10 @@ option(NOTA_SANITIZE    "Enable Address+UB sanitizers" OFF)
 add_library(nota_flags INTERFACE)
 target_compile_options(nota_flags INTERFACE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow>
+  # MSVC는 소스를 시스템 코드 페이지로 읽는다. 한국어 Windows(CP949)에서는
+  # UTF-8 주석이 전부 C4819 경고가 되어 빌드 로그가 수십 줄씩 오염된다.
+  # /utf-8 은 소스와 실행 문자셋을 모두 UTF-8로 고정한다.
+  $<$<CXX_COMPILER_ID:MSVC>:/utf-8;/W4>
 )
 if(NOTA_SANITIZE)
   target_compile_options(nota_flags INTERFACE -fsanitize=address,undefined -fno-omit-frame-pointer)

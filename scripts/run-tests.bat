@@ -1,138 +1,157 @@
 @echo off
 REM ============================================================
-REM  Nota - 로컬 검증 스크립트 (Windows)
+REM  Nota - local verification (Windows)
 REM
-REM  코어는 플랫폼 중립 C++17이고 외부 의존성이 없으므로
-REM  cmake와 C++ 컴파일러만 있으면 전부 돌아간다.
+REM  This file is intentionally ASCII-only.  cmd.exe parses batch
+REM  files using the console code page, so a UTF-8 batch file with
+REM  non-ASCII text gets mangled on a Korean (CP949) system -- and
+REM  switching the code page mid-file can corrupt parsing of the
+REM  lines that follow.  Tool output is a different matter: we set
+REM  UTF-8 before running them so their messages render correctly.
 REM
-REM  사용법:  scripts\run-tests.bat
-REM  결과:    nota-test-log.txt
+REM  Usage:  scripts\run-tests.bat
+REM  Output: nota-test-log.txt
 REM ============================================================
 setlocal enabledelayedexpansion
 cd /d "%~dp0\.."
 
-set LOG=%CD%\nota-test-log.txt
-set FAIL=0
+REM Remember the console code page, switch to UTF-8 for child output.
+for /f "tokens=2 delims=:" %%c in ('chcp') do set "OLDCP=%%c"
+set "OLDCP=%OLDCP: =%"
+chcp 65001 >nul 2>&1
 
-echo Nota 로컬 검증 > "%LOG%"
-echo 시각: %DATE% %TIME% >> "%LOG%"
-echo. >> "%LOG%"
+set "LOG=%CD%\nota-test-log.txt"
+set "FAIL=0"
+
+> "%LOG%" echo Nota local verification
+>> "%LOG%" echo Date: %DATE% %TIME%
+>> "%LOG%" echo.
 
 echo.
 echo ============================================================
-echo  Nota 로컬 검증 시작
-echo  로그: %LOG%
+echo  Nota local verification
+echo  Log: %LOG%
 echo ============================================================
 echo.
 
-REM ---------- 0. 환경 ----------
-echo [0/4] 환경 확인
-echo ---- 환경 ---- >> "%LOG%"
+REM ---------- 0. environment ----------
+echo [0/4] Environment
+>> "%LOG%" echo ---- environment ----
 where cmake >nul 2>&1
 if errorlevel 1 (
-  echo   [X] cmake 를 찾을 수 없다.
-  echo   설치: https://cmake.org/download/  또는  winget install Kitware.CMake
-  echo cmake 없음 >> "%LOG%"
-  exit /b 1
+  echo   [X] cmake not found.
+  echo       Install: winget install Kitware.CMake  ^(then open a NEW cmd window^)
+  >> "%LOG%" echo cmake not found
+  goto :done
 )
 cmake --version >> "%LOG%" 2>&1
 git --version >> "%LOG%" 2>&1
-for /f "tokens=*" %%v in ('cmake --version ^| findstr /r "^cmake"') do echo   %%v
-git rev-parse --short HEAD > nul 2>&1 && (
-  for /f %%h in ('git rev-parse --short HEAD') do echo   커밋 %%h
+for /f "tokens=1-3" %%a in ('cmake --version ^| findstr /b cmake') do echo   cmake %%c
+git rev-parse --short HEAD >nul 2>&1 && (
+  for /f %%h in ('git rev-parse --short HEAD') do echo   commit %%h
   git rev-parse --short HEAD >> "%LOG%" 2>&1
 )
 echo.
 
-REM ---------- 1. 빌드 설정 ----------
-echo [1/4] 빌드 설정
-echo. >> "%LOG%"
-echo ---- 설정 ---- >> "%LOG%"
+REM ---------- 1. configure ----------
+echo [1/4] Configure
+>> "%LOG%" echo.
+>> "%LOG%" echo ---- configure ----
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo >> "%LOG%" 2>&1
 if errorlevel 1 (
-  echo   [X] 설정 실패. 로그를 보라: %LOG%
-  exit /b 1
+  echo   [X] configure failed - see %LOG%
+  set "FAIL=1"
+  goto :done
 )
-echo   완료
+echo   ok
 echo.
 
-REM ---------- 2. 빌드 ----------
-echo [2/4] 빌드
-echo. >> "%LOG%"
-echo ---- 빌드 ---- >> "%LOG%"
+REM ---------- 2. build ----------
+echo [2/4] Build
+>> "%LOG%" echo.
+>> "%LOG%" echo ---- build ----
 cmake --build build --config RelWithDebInfo >> "%LOG%" 2>&1
 if errorlevel 1 (
-  echo   [X] 빌드 실패. 로그를 보라: %LOG%
+  echo   [X] build failed
   echo.
-  echo   --- 오류 발췌 ---
+  echo   --- errors ---
   findstr /i /c:"error" "%LOG%"
-  exit /b 1
+  set "FAIL=1"
+  goto :done
 )
-echo   완료
+echo   ok
 
-REM 생성기에 따라 실행 파일 위치가 다르다.
-REM  Ninja / Makefiles : build\core\tests\nota_core_tests.exe
-REM  Visual Studio     : build\core\tests\RelWithDebInfo\nota_core_tests.exe
-set TESTBIN=
-if exist "build\core\tests\nota_core_tests.exe" set TESTBIN=build\core\tests\nota_core_tests.exe
-if exist "build\core\tests\RelWithDebInfo\nota_core_tests.exe" set TESTBIN=build\core\tests\RelWithDebInfo\nota_core_tests.exe
-if exist "build\core\tests\Release\nota_core_tests.exe" set TESTBIN=build\core\tests\Release\nota_core_tests.exe
-if exist "build\core\tests\Debug\nota_core_tests.exe" set TESTBIN=build\core\tests\Debug\nota_core_tests.exe
+REM Binary location depends on the generator:
+REM   Ninja / Makefiles  -> build\core\tests\
+REM   Visual Studio      -> build\core\tests\RelWithDebInfo\
+set "TESTBIN="
+for %%d in ("build\core\tests" "build\core\tests\RelWithDebInfo" "build\core\tests\Release" "build\core\tests\Debug") do (
+  if exist "%%~d\nota_core_tests.exe" set "TESTBIN=%%~d\nota_core_tests.exe"
+)
+set "TOOLDIR="
+for %%d in ("build\tools" "build\tools\RelWithDebInfo" "build\tools\Release" "build\tools\Debug") do (
+  if exist "%%~d\nota-analyze.exe" set "TOOLDIR=%%~d"
+)
+echo   binary: !TESTBIN!
+>> "%LOG%" echo binary: !TESTBIN!
 
-set TOOLDIR=
-if exist "build\tools\nota-analyze.exe" set TOOLDIR=build\tools
-if exist "build\tools\RelWithDebInfo\nota-analyze.exe" set TOOLDIR=build\tools\RelWithDebInfo
-if exist "build\tools\Release\nota-analyze.exe" set TOOLDIR=build\tools\Release
-if exist "build\tools\Debug\nota-analyze.exe" set TOOLDIR=build\tools\Debug
-
-echo   실행 파일: %TESTBIN%
-echo 실행 파일: %TESTBIN% >> "%LOG%"
+REM Count compiler warnings - the project keeps this at zero.
+set "WARNCOUNT=0"
+for /f %%n in ('findstr /i /c:"warning" "%LOG%" ^| find /c /v ""') do set "WARNCOUNT=%%n"
+echo   compiler warnings: !WARNCOUNT!
+>> "%LOG%" echo compiler warnings: !WARNCOUNT!
 echo.
 
-REM ---------- 3. 단위 테스트 ----------
-echo [3/4] 단위 테스트
-echo. >> "%LOG%"
-echo ---- 단위 테스트 ---- >> "%LOG%"
-if "%TESTBIN%"=="" (
-  echo   [X] 테스트 실행 파일을 찾을 수 없다.
-  exit /b 1
+REM ---------- 3. unit tests ----------
+echo [3/4] Unit tests
+>> "%LOG%" echo.
+>> "%LOG%" echo ---- unit tests ----
+if "!TESTBIN!"=="" (
+  echo   [X] test binary not found
+  set "FAIL=1"
+  goto :done
 )
-"%TESTBIN%" >> "%LOG%" 2>&1
-if errorlevel 1 set FAIL=1
-for /f "tokens=*" %%l in ('findstr /c:"passed" "%LOG%"') do echo   %%l
+"!TESTBIN!" >> "%LOG%" 2>&1
+if errorlevel 1 set "FAIL=1"
+for /f "tokens=*" %%l in ('findstr /c:"passed," "%LOG%"') do echo   %%l
 echo.
 
-REM ---------- 4. CLI 동작 확인 ----------
-echo [4/4] CLI 확인
-echo. >> "%LOG%"
-echo ---- CLI ---- >> "%LOG%"
-if "%TOOLDIR%"=="" (
-  echo   건너뜀 - CLI 빌드 안 됨
+REM ---------- 4. CLI smoke test ----------
+echo [4/4] CLI
+>> "%LOG%" echo.
+>> "%LOG%" echo ---- CLI ----
+if "!TOOLDIR!"=="" (
+  echo   skipped - tools not built
 ) else (
   for %%t in (nota-analyze nota-geometry nota-scroll) do (
-    "%TOOLDIR%\%%t.exe" --help >> "%LOG%" 2>&1
-    if errorlevel 2 (
-      echo   %%t : 실행됨
+    >> "%LOG%" echo.
+    >> "%LOG%" echo -- %%t --help --
+    "!TOOLDIR!\%%t.exe" --help >> "%LOG%" 2>&1
+    if errorlevel 1 (
+      echo   %%t : FAILED
+      set "FAIL=1"
     ) else (
-      echo   %%t : 실행됨
+      echo   %%t : ok
     )
   )
-  echo. >> "%LOG%"
-  echo   악보 이미지가 있으면 이렇게 쓴다: >> "%LOG%"
-  echo     %TOOLDIR%\nota-analyze.exe page.pgm --overlay out.ppm >> "%LOG%"
+  >> "%LOG%" echo.
+  >> "%LOG%" echo With a score image: !TOOLDIR!\nota-analyze.exe page.pgm --overlay out.ppm
 )
 echo.
 
-REM ---------- 요약 ----------
+:done
 echo ============================================================
 if "%FAIL%"=="0" (
-  echo  결과: 통과
+  echo  RESULT: PASS
 ) else (
-  echo  결과: 실패 - 로그를 보라
+  echo  RESULT: FAIL - see the log
 )
-echo  로그: %LOG%
+echo  Log: %LOG%
 echo ============================================================
 echo.
-echo 로그를 보려면:  type nota-test-log.txt
+echo To read the log:   type nota-test-log.txt
 echo.
+
+REM Restore the original code page.
+if defined OLDCP chcp %OLDCP% >nul 2>&1
 exit /b %FAIL%

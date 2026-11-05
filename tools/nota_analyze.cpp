@@ -167,6 +167,11 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  if (std::strcmp(argv[1], "--help") == 0 || std::strcmp(argv[1], "-h") == 0) {
+    PrintUsage();
+    return 0;
+  }
+
   const std::string input = argv[1];
   std::string overlay_path;
   std::string projection_path;

@@ -1,0 +1,15 @@
+# 배치 파일은 CRLF여야 한다. cmd.exe는 LF만 있는 배치에서
+# goto 라벨과 행 연속 처리가 불안정하다.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 셸 스크립트는 항상 LF.
+*.sh text eol=lf
+
+# 이미지와 바이너리는 변환하지 않는다.
+*.png binary
+*.pgm binary
+*.ppm binary
+*.pdf binary
+*.wav binary
+*.mp3 binary
