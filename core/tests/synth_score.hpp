@@ -32,6 +32,10 @@ struct SynthParams {
   // 양손 기둥이 정렬되어 마디선처럼 보이는 상황을 재현한다 — 이미지 특징으로는
   // 진짜 마디선과 구별되지 않지만, 결과로 생기는 마디가 비정상적으로 좁다.
   bool split_first_measure = false;
+  // 참이면 첫 오선의 가운데 선을 "투영이 중간에서 끊긴" 모양으로 그린다.
+  // 선 하나가 두 개의 런으로 검출되는 상황을 재현한다 — 실제 악보에서 조판
+  // 크기가 크거나 작을 때 나타났고, 그 오선 전체가 깨지는 원인이었다.
+  bool split_one_staff_line = false;
 };
 
 struct SynthScore {
@@ -94,7 +98,6 @@ inline SynthScore GenerateScore(const SynthParams& p) {
 
   const int x_start = p.margin_x;
   const int x_end = p.width - p.margin_x;
-  const double half_thick = 0.5 * static_cast<double>(p.line_thickness - 1);
 
   double y = static_cast<double>(p.top_margin);
   for (int s = 0; s < p.systems; ++s) {
@@ -106,8 +109,17 @@ inline SynthScore GenerateScore(const SynthParams& p) {
       for (int k = 0; k < 5; ++k) {
         const double line_top = staff_top + static_cast<double>(k) * p.staff_space;
         const int iy = static_cast<int>(std::lround(line_top));
-        detail::FillRect(out.image, x_start, iy, x_end, iy + p.line_thickness, 0);
-        out.line_centers.push_back(static_cast<double>(iy) + half_thick);
+        const bool split = p.split_one_staff_line && s == 0 && staff == 0 && k == 2;
+        const int thick = split ? std::max(5, p.line_thickness + 2) : p.line_thickness;
+        detail::FillRect(out.image, x_start, iy, x_end, iy + thick, 0);
+        if (split) {
+          // 가운데 행의 잉크를 대부분 지워 투영이 임계 아래로 내려가게 한다.
+          const int mid = iy + thick / 2;
+          const int keep = x_start + (x_end - x_start) / 5;
+          detail::FillRect(out.image, keep, mid, x_end, mid + 1, 255);
+        }
+        out.line_centers.push_back(
+            static_cast<double>(iy) + 0.5 * static_cast<double>(thick - 1));
       }
 
       if (p.draw_noteheads) {

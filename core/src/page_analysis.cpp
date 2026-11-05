@@ -315,7 +315,9 @@ std::vector<Barline> DetectBarlinesInSystem(const BinaryImage& image,
   const auto close_run = [&](int end_exclusive) {
     if (run_start < 0) return;
     const int thickness = end_exclusive - run_start;
-    if (thickness <= params.max_thickness) {
+    const int limit = std::max(
+        2, static_cast<int>(params.max_thickness_ratio * system.staff_space));
+    if (thickness <= limit) {
       Barline bar;
       bar.x = static_cast<double>(run_start) +
               0.5 * static_cast<double>(thickness - 1);
@@ -383,8 +385,12 @@ int MeasureInkDensity(const BinaryImage& image, const StaffDetectResult& staves,
     if (s < 0 || static_cast<std::size_t>(s) >= staves.staves.size()) continue;
     for (int k = 0; k < 5; ++k) {
       const int center = static_cast<int>(std::lround(staves.staves[static_cast<std::size_t>(s)].line_y[k]));
-      // 선 두께를 모르므로 중심 ±2행을 오선으로 본다. 보수적인 근사다.
-      for (int dy = -2; dy <= 2; ++dy) {
+      // 선 두께를 모르므로 중심 주변 몇 행을 오선으로 본다. 보수적인 근사이며,
+      // 해상도에 따라 획 두께가 달라지므로 오선 간격에 비례시킨다.
+      const int band = std::max(
+          1, static_cast<int>(0.15 * staves.staves[static_cast<std::size_t>(s)]
+                                         .staff_space));
+      for (int dy = -band; dy <= band; ++dy) {
         const int y = center + dy;
         if (y >= y0 && y < y1) {
           is_staff_row[static_cast<std::size_t>(y - y0)] = 1;

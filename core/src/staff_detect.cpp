@@ -50,19 +50,19 @@ StaffDetectResult DetectStaves(const BinaryImage& image,
   result.row_threshold = std::max(relative, floor_abs);
 
   // --- 3. 임계를 넘는 연속 행을 하나의 수평선으로 묶는다 ---------------------
+  // 두께로 거르는 일은 오선 간격을 안 뒤에 한다 (아래 3b).
+  struct Run {
+    int start;
+    int thickness;
+    int peak;
+  };
+  std::vector<Run> runs;
+
   int run_start = -1;
   int run_peak = 0;
   const auto close_run = [&](int end_exclusive) {
     if (run_start < 0) return;
-    const int thickness = end_exclusive - run_start;
-    if (thickness <= params.max_line_thickness) {
-      StaffLine line;
-      line.y_center =
-          static_cast<double>(run_start) + 0.5 * static_cast<double>(thickness - 1);
-      line.thickness = thickness;
-      line.ink_count = run_peak;
-      result.lines.push_back(line);
-    }
+    runs.push_back(Run{run_start, end_exclusive - run_start, run_peak});
     run_start = -1;
     run_peak = 0;
   };
@@ -77,6 +77,58 @@ StaffDetectResult DetectStaves(const BinaryImage& image,
     }
   }
   close_run(image.height);
+
+  // --- 3b. 오선 간격을 추정하고 두께로 거른다 --------------------------------
+  // 연속한 런 중심 간 간격의 중위수가 오선 간격이다. 한 페이지에서 오선 내부
+  // 간격이 오선 사이 간격보다 훨씬 많기 때문이다 (14개 오선 기준 56:13).
+  std::vector<double> centers;
+  centers.reserve(runs.size());
+  for (const Run& r : runs) {
+    centers.push_back(static_cast<double>(r.start) +
+                      0.5 * static_cast<double>(r.thickness - 1));
+  }
+  std::vector<double> consecutive_gaps;
+  for (std::size_t i = 0; i + 1 < centers.size(); ++i) {
+    consecutive_gaps.push_back(centers[i + 1] - centers[i]);
+  }
+  const double space_estimate = Median(std::move(consecutive_gaps));
+
+  // 쪼개진 오선을 다시 합친다. 간격이 오선 간격에 한참 못 미치는 이웃 런은
+  // 서로 다른 선일 수 없다 — 같은 선이 투영 임계 아래로 잠깐 내려가 끊긴 것이다.
+  const double merge_gap = params.merge_split_line_ratio * space_estimate;
+  std::vector<Run> merged;
+  for (std::size_t i = 0; i < runs.size(); ++i) {
+    if (!merged.empty() && merge_gap > 0.0) {
+      const Run& last = merged.back();
+      const double last_center =
+          static_cast<double>(last.start) +
+          0.5 * static_cast<double>(last.thickness - 1);
+      const double this_center =
+          static_cast<double>(runs[i].start) +
+          0.5 * static_cast<double>(runs[i].thickness - 1);
+      if (this_center - last_center < merge_gap) {
+        const int end = runs[i].start + runs[i].thickness;
+        merged.back().thickness = end - last.start;
+        merged.back().peak = std::max(last.peak, runs[i].peak);
+        continue;
+      }
+    }
+    merged.push_back(runs[i]);
+  }
+
+  const int thickness_limit =
+      std::max(params.min_line_thickness_limit,
+               static_cast<int>(params.max_line_thickness_ratio * space_estimate));
+
+  for (const Run& r : merged) {
+    if (r.thickness > thickness_limit) continue;
+    StaffLine line;
+    line.y_center = static_cast<double>(r.start) +
+                    0.5 * static_cast<double>(r.thickness - 1);
+    line.thickness = r.thickness;
+    line.ink_count = r.peak;
+    result.lines.push_back(line);
+  }
 
   // --- 4. 5선 묶음 찾기 -----------------------------------------------------
   // 연속한 5개 선의 간격 4개가 서로 일관되면 하나의 오선으로 본다.
