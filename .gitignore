@@ -121,3 +121,4 @@ prototype/fixtures/**
 # ---- 분석 산출물 ----
 prototype/out/
 *.log
+nota-test-log.txt
