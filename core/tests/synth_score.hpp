@@ -28,6 +28,10 @@ struct SynthParams {
   int barlines_per_system = 4;
   bool draw_noteheads = true;
   bool draw_barlines = true;
+  // 참이면 각 시스템의 첫 마디 한가운데에 가짜 마디선을 하나 더 긋는다.
+  // 양손 기둥이 정렬되어 마디선처럼 보이는 상황을 재현한다 — 이미지 특징으로는
+  // 진짜 마디선과 구별되지 않지만, 결과로 생기는 마디가 비정상적으로 좁다.
+  bool split_first_measure = false;
 };
 
 struct SynthScore {
@@ -128,6 +132,13 @@ inline SynthScore GenerateScore(const SynthParams& p) {
     }
 
     const double system_bottom = y + staff_height + p.intra_system_gap + staff_height;
+    if (p.draw_barlines && p.split_first_measure) {
+      const double t = 0.5 / static_cast<double>(p.barlines_per_system);
+      const int bx = x_start + static_cast<int>(
+                                   t * static_cast<double>(x_end - x_start)) - 2;
+      detail::FillRect(out.image, bx, static_cast<int>(system_top), bx + 2,
+                       static_cast<int>(system_bottom) + p.line_thickness, 0);
+    }
     if (p.draw_barlines) {
       for (int b = 1; b <= p.barlines_per_system; ++b) {
         const double t = static_cast<double>(b) /

@@ -9,6 +9,51 @@
 namespace nota {
 namespace {
 
+double Median(std::vector<double> v) {
+  if (v.empty()) return 0.0;
+  const std::size_t mid = v.size() / 2;
+  std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(mid), v.end());
+  const double hi = v[mid];
+  if (v.size() % 2 == 1) return hi;
+  std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(mid - 1),
+                   v.begin() + static_cast<std::ptrdiff_t>(mid));
+  return 0.5 * (hi + v[mid - 1]);
+}
+
+// 비정상적으로 좁은 마디를 이웃과 합친다. 근거는 BarlineDetectParams 주석.
+//
+// edges는 [시스템 좌측 끝, 마디선들..., 시스템 우측 끝]이다. 가장 좁은 마디를
+// 찾아 더 좁은 쪽 이웃과 합치기를 반복하고, 더 이상 임계 미만이 없으면 멈춘다.
+void MergeNarrowMeasures(std::vector<double>* edges, double min_relative_width) {
+  if (min_relative_width <= 0.0) return;
+
+  while (edges->size() > 2) {
+    const std::size_t count = edges->size() - 1;
+    std::vector<double> widths(count);
+    for (std::size_t i = 0; i < count; ++i) {
+      widths[i] = (*edges)[i + 1] - (*edges)[i];
+    }
+    const double med = Median(widths);
+    if (med <= 0.0) break;
+
+    const std::size_t k = static_cast<std::size_t>(
+        std::min_element(widths.begin(), widths.end()) - widths.begin());
+    if (widths[k] / med >= min_relative_width) break;
+
+    // 좁은 마디를 어느 쪽과 합칠지: 더 좁은 이웃과 합친다. 쪼개진 조각 둘이
+    // 서로를 찾아가게 하는 선택이다.
+    std::size_t drop = 0;
+    if (k == 0) {
+      drop = 1;
+    } else if (k + 1 == count) {
+      drop = edges->size() - 2;
+    } else {
+      drop = (widths[k - 1] <= widths[k + 1]) ? k : k + 1;
+    }
+    edges->erase(edges->begin() + static_cast<std::ptrdiff_t>(drop));
+  }
+}
+
 
 // 오선이 실제로 그려진 수평 범위를 찾는다. 페이지 폭이 아니라 이 범위가
 // 마디 계산과 연결선 탐색의 기준이다 — 여백과 잘라내기 정도가 악보마다 다르다.
@@ -379,13 +424,25 @@ PageAnalysis AnalyzePage(const BinaryImage& image,
     std::vector<double> edges;
     edges.push_back(sys.x_start);
     for (const Barline& bar : bars) {
-      out.barlines.push_back(bar);
       if (bar.x > sys.x_start + 1.0 && bar.x < sys.x_end - 1.0) {
         edges.push_back(bar.x);
       }
     }
     edges.push_back(sys.x_end);
     std::sort(edges.begin(), edges.end());
+
+    MergeNarrowMeasures(&edges, params.barline.min_relative_measure_width);
+
+    // 병합 후 살아남은 내부 경계만 마디선으로 보고한다.
+    for (const Barline& bar : bars) {
+      const bool survived =
+          std::any_of(edges.begin(), edges.end(), [&](double e) {
+            return std::fabs(e - bar.x) < 0.5;
+          });
+      if (survived || bar.x <= sys.x_start + 1.0 || bar.x >= sys.x_end - 1.0) {
+        out.barlines.push_back(bar);
+      }
+    }
 
     const int y0 = std::max(0, static_cast<int>(std::floor(sys.y_top)));
     const int y1 =

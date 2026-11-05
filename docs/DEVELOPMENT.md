@@ -111,30 +111,32 @@ pdftoppm -gray -r 200 -f 1 -l 1 score.pdf page   # page-1.pgm
 | `nota::EstimateSkewDegrees` / `RotateGray` | 기울기 추정·보정 |
 | `nota::DetectStaves` | 오선 검출 |
 | `nota::AnalyzePageGray` | 전처리~마디 상자까지 전체 경로 + 자체 품질 평가 |
+| `nota::ScoreGeometry` | 여러 페이지 → 이어붙인 캔버스, 박↔픽셀 양방향 변환 |
 | `nota-analyze` | 페이지 분석 CLI |
+| `nota-geometry` | 다중 페이지 매핑 CLI |
 
-측정 결과는 `ALGORITHM.md` 8.0(V1/V2), 8.1(열화 내성), 8.2(품질 평가).
+측정 결과는 `ALGORITHM.md` 8.0(V1/V2), 8.0.1(매핑 오차), 8.1(열화 내성),
+8.2(품질 평가). 다섯 페이지 모두 V1/V2 F=1.000이고 매핑 드리프트는 0박이다.
 
-### 다음 — 시간↔픽셀 매핑
+### 매핑 오차 측정
 
-`core/include/nota/score_geometry.hpp`에 **설계와 API만** 들어 있고 구현이
-없다. 헤더 주석에 핵심 결정의 근거가 적혀 있으니 먼저 읽을 것.
+```
+python3 prototype/evaluate_geometry.py prototype/out/scores/bach_bwv846 2 \
+    --beats-per-measure 4
+```
 
-요점: 시스템 안에서 음악은 가로로 진행하지만 스크롤은 세로로 움직인다. 연주
-위치를 그대로 y로 옮기면 "멈춤 → 점프"가 반복된다. 한 시스템을 연주하는 동안
-y가 시스템 하나 높이만큼 연속으로 흐르게 보간한다.
+### 다음 — 스크롤 제어기
+
+`ALGORITHM.md` 7절. 임계 감쇠 스프링 + 속도 피드포워드 + 수동 개입 양보.
+입력이 숫자뿐이라 오디오 없이 단위 테스트가 된다.
+
+`ScoreGeometry::PixelsPerBeat`가 피드포워드 항에 들어갈 값을 이미 제공한다.
 
 구현할 것:
 
-1. `core/src/score_geometry.cpp` — `Build`, `CanvasY`, `BeatAt`,
-   `PixelsPerBeat`, `SystemAt`
-2. `core/CMakeLists.txt`에 소스 추가
-3. `core/tests/test_score_geometry.cpp` — 단조성, `BeatAt(CanvasY(b)) == b`
-   왕복, 페이지 이어붙이기 오프셋, 범위 밖 고정, 두 가지 시간 배분 방식
-4. 여러 페이지를 받아 매핑을 내보내는 CLI (`nota-geometry`)
-
-그 다음은 스크롤 제어기(`ALGORITHM.md` 7절). 입력이 숫자뿐이라 오디오 없이
-단위 테스트가 된다.
+1. `core/include/nota/scroll_controller.hpp` / `src/scroll_controller.cpp`
+2. 단위 테스트 — 오버슈트 없음(임계 감쇠), 등속 구간에서 정상상태 오차 0,
+   속도 제한 준수, 수동 개입 시 즉시 양보
 
 ### 녹음이 와야 가능한 것
 

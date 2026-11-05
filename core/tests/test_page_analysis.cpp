@@ -156,3 +156,67 @@ NOTA_TEST(QualityIsZeroOnBlankPage) {
   CHECK(!page.quality.is_consistent());
   CHECK_NEAR(page.quality.consistency(), 0.0, 1e-9);
 }
+
+NOTA_TEST(NarrowMeasuresFromFalseBarlinesAreMerged) {
+  // 가짜 마디선이 진짜 마디를 둘로 쪼갠 상황. 이미지 특징으로는 진짜와
+  // 구별되지 않지만, 결과로 생긴 마디가 비정상적으로 좁다.
+  nota_test::SynthParams params;
+  params.systems = 3;
+  params.barlines_per_system = 4;
+  params.split_first_measure = true;
+  const nota_test::SynthScore score = nota_test::GenerateScore(params);
+  const nota::BinaryImage bin = nota::BinarizeSauvola(score.image.view());
+
+  // 병합을 끄면 시스템마다 마디가 하나씩 늘어난다.
+  nota::PageAnalysisParams off;
+  off.barline.min_relative_measure_width = 0.0;
+  const nota::PageAnalysis without = nota::AnalyzePage(bin, off);
+  CHECK_EQ(without.measures.size(),
+           static_cast<std::size_t>(params.systems * 5));
+
+  // 기본값(병합 켬)이면 원래 마디 수로 돌아와야 한다.
+  const nota::PageAnalysis with = nota::AnalyzePage(bin);
+  CHECK_EQ(with.measures.size(), static_cast<std::size_t>(params.systems * 4));
+}
+
+NOTA_TEST(MergingDoesNotTouchCleanScores) {
+  // 병합이 무해해야 한다. 쪼개진 마디가 없으면 아무것도 바뀌지 않는다.
+  nota_test::SynthParams params;
+  params.systems = 3;
+  params.barlines_per_system = 4;
+  const nota::BinaryImage bin =
+      nota::BinarizeSauvola(nota_test::GenerateScore(params).image.view());
+
+  nota::PageAnalysisParams off;
+  off.barline.min_relative_measure_width = 0.0;
+
+  const nota::PageAnalysis without = nota::AnalyzePage(bin, off);
+  const nota::PageAnalysis with = nota::AnalyzePage(bin);
+
+  CHECK_EQ(with.measures.size(), without.measures.size());
+  for (std::size_t i = 0; i < with.measures.size(); ++i) {
+    CHECK_NEAR(with.measures[i].x_start, without.measures[i].x_start, 1e-9);
+    CHECK_NEAR(with.measures[i].x_end, without.measures[i].x_end, 1e-9);
+  }
+}
+
+NOTA_TEST(MergingPreservesSystemCoverage) {
+  // 병합 후에도 마디가 시스템 전체 폭을 빈틈없이 덮어야 한다.
+  nota_test::SynthParams params;
+  params.systems = 2;
+  params.split_first_measure = true;
+  const nota::PageAnalysis page = Analyze(nota_test::GenerateScore(params).image);
+
+  for (std::size_t s = 0; s < page.systems.size(); ++s) {
+    std::vector<const nota::Measure*> in_system;
+    for (const nota::Measure& m : page.measures) {
+      if (m.system_index == static_cast<int>(s)) in_system.push_back(&m);
+    }
+    CHECK(!in_system.empty());
+    CHECK_NEAR(in_system.front()->x_start, page.systems[s].x_start, 0.01);
+    CHECK_NEAR(in_system.back()->x_end, page.systems[s].x_end, 0.01);
+    for (std::size_t k = 0; k + 1 < in_system.size(); ++k) {
+      CHECK_NEAR(in_system[k]->x_end, in_system[k + 1]->x_start, 0.01);
+    }
+  }
+}
