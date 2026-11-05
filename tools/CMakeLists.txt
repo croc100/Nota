@@ -11,3 +11,6 @@ target_link_libraries(nota-analyze PRIVATE nota_core nota_tools_io nota_flags)
 
 add_executable(nota-geometry nota_geometry.cpp)
 target_link_libraries(nota-geometry PRIVATE nota_core nota_tools_io nota_flags)
+
+add_executable(nota-scroll nota_scroll.cpp)
+target_link_libraries(nota-scroll PRIVATE nota_core nota_tools_io nota_flags)

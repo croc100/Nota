@@ -113,7 +113,9 @@ pdftoppm -gray -r 200 -f 1 -l 1 score.pdf page   # page-1.pgm
 | `nota::AnalyzePageGray` | 전처리~마디 상자까지 전체 경로 + 자체 품질 평가 |
 | `nota::ScoreGeometry` | 여러 페이지 → 이어붙인 캔버스, 박↔픽셀 양방향 변환 |
 | `nota-analyze` | 페이지 분석 CLI |
+| `nota::ScrollController` | 임계 감쇠 스프링 + 속도 피드포워드 + 수동 개입 양보 |
 | `nota-geometry` | 다중 페이지 매핑 CLI |
+| `nota-scroll` | 전체 파이프라인 시뮬레이션 CLI |
 
 측정 결과는 `ALGORITHM.md` 8.0(V1/V2), 8.0.1(매핑 오차), 8.1(열화 내성),
 8.2(품질 평가). 다섯 페이지 모두 V1/V2 F=1.000이고 매핑 드리프트는 0박이다.
@@ -125,31 +127,35 @@ python3 prototype/evaluate_geometry.py prototype/out/scores/bach_bwv846 2 \
     --beats-per-measure 4
 ```
 
-### 다음 — 스크롤 제어기
+### 전체 파이프라인 확인
 
-`ALGORITHM.md` 7절. 임계 감쇠 스프링 + 속도 피드포워드 + 수동 개입 양보.
-입력이 숫자뿐이라 오디오 없이 단위 테스트가 된다.
+오디오를 제외한 전 구간이 이어져 있다. 실제 악보로 돌려보고 눈으로 확인할 수 있다.
 
-`ScoreGeometry::PixelsPerBeat`가 피드포워드 항에 들어갈 값을 이미 제공한다.
+```
+./build/tools/nota-scroll prototype/out/scores/bach_bwv846_p1.pgm \
+    prototype/out/scores/bach_bwv846_p2.pgm \
+    --tempo 72 --beats-per-measure 4 --viewport 900 --csv trace.csv
 
-구현할 것:
+python3 prototype/render_scroll.py trace.csv \
+    prototype/out/scores/bach_bwv846_p1.png \
+    prototype/out/scores/bach_bwv846_p2.png -o filmstrip.png
+```
 
-1. `core/include/nota/scroll_controller.hpp` / `src/scroll_controller.cpp`
-2. 단위 테스트 — 오버슈트 없음(임계 감쇠), 등속 구간에서 정상상태 오차 0,
-   속도 제한 준수, 수동 개입 시 즉시 양보
+기대값은 `ALGORITHM.md` 7.6절.
 
-### 녹음이 와야 가능한 것
+### 다음 — 오디오
 
-V3~V7(온셋·템포·드리프트). 필요한 녹음 조건은
-`prototype/fixtures/README.md`에 정리해 두었다. 특히 **페달을 밟은 녹음**이
-결정적이다 — 온셋 검출이 가장 깨지는 조건이고, 여기서 제품 성립 여부가 갈린다.
-MIDI 건반으로 오디오와 MIDI를 동시 녹음하면 온셋 정답이 자동으로 따라온다.
+남은 것은 오디오 파이프라인뿐이다. 자리는 이미 비워져 있다 — `nota-scroll`이
+일정한 템포를 넣는 그 자리에 위치 추정기의 출력이 들어간다.
 
-## 5. 지켜야 할 규칙
+**실제 피아노 녹음이 있어야 진행할 수 있다.** 합성 오디오로는 판정할 수 없다는
+것이 측정으로 드러났다(`ALGORITHM.md` 8.3, `docs/decisions/0002-ml-vs-dsp.md`).
+필요한 녹음 조건은 `prototype/fixtures/README.md`에 있다. 특히 **페달을 밟은
+녹음**이 결정적이고, MIDI 건반으로 오디오와 MIDI를 동시 녹음하면 온셋 정답이
+자동으로 따라온다.
 
-- **코어에 플랫폼 API 금지.** Apple/Android/OS 헤더가 섞이면 Linux 빌드가
-  깨지고 CI가 잡는다. 이것이 규칙을 강제하는 장치다 (`DESIGN.md` 3.2).
-- **임계값은 측정해서 정한다.** 이 저장소의 상수는 대부분 실측에서 나왔고
-  근거가 주석에 있다. 추측으로 숫자를 만지지 말 것.
-- **실제 악보로 확인한다.** 합성 악보에서 통과한 판별식이 실제 악보에서 두 번
-  틀렸다 (`ALGORITHM.md` 5.3, 5.4).
+녹음을 기다리는 동안 할 수 있는 것:
+
+- librosa가 잔향에서 더 강건한 이유를 분석해 피크 선택기를 개선 (0.971 대 0.999)
+- 검증 표본 확대 — 반복 구간, 변박, 성부 분리가 있는 작품
+- 실제 스캔본 표본 확보 (현재는 전부 디지털 조판 + 합성 열화)

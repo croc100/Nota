@@ -5,6 +5,7 @@ add_executable(nota_core_tests
   test_page_analysis.cpp
   test_skew.cpp
   test_score_geometry.cpp
+  test_scroll_controller.cpp
 )
 
 target_link_libraries(nota_core_tests PRIVATE nota_core nota_flags)

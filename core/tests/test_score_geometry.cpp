@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 #include "nota/page_analysis.hpp"
@@ -17,16 +18,35 @@ struct Fixture {
 };
 
 // 동일한 합성 페이지를 n장 쌓는다. 실제 악보의 다중 페이지 구조를 흉내낸다.
+// 합성 + 전체 분석은 비싸다. 시스템 수별로 한 번만 분석하고 재사용한다.
 Fixture MakePages(int count, int systems = 3) {
-  nota_test::SynthParams p;
-  p.systems = systems;
-  const nota_test::SynthScore score = nota_test::GenerateScore(p);
-  const nota::PageAnalysis page = nota::AnalyzePageGray(score.image.view());
+  static std::vector<std::pair<int, std::pair<nota::PageAnalysis, int>>> cache;
+  const nota::PageAnalysis* cached = nullptr;
+  int cached_height = 0;
+  for (const auto& e : cache) {
+    if (e.first == systems) {
+      cached = &e.second.first;
+      cached_height = e.second.second;
+      break;
+    }
+  }
+  if (cached == nullptr) {
+    nota_test::SynthParams sp;
+    sp.systems = systems;
+    const nota_test::SynthScore sc = nota_test::GenerateScore(sp);
+    cache.emplace_back(systems,
+                       std::make_pair(nota::AnalyzePageGray(sc.image.view()),
+                                      sc.image.height));
+    cached = &cache.back().second.first;
+    cached_height = cache.back().second.second;
+  }
+  const nota::PageAnalysis& page = *cached;
+  const nota_test::SynthScore score{nota::GrayImage(1, cached_height), {}, {}, 0, 0, 0.0, 0.0};
 
   Fixture f;
   for (int i = 0; i < count; ++i) {
     f.pages.push_back(page);
-    f.heights.push_back(score.image.height);
+    f.heights.push_back(cached_height);
   }
   f.systems_per_page = static_cast<int>(page.systems.size());
   f.measures_per_page = static_cast<int>(page.measures.size());
